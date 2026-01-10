@@ -11,6 +11,7 @@ import html2text
 from urllib.parse import urlparse, parse_qs
 from apify_client import ApifyClient
 from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
@@ -165,47 +166,52 @@ def scrape_search_results(driver, search_url: str) -> list:
         return []
 
 
-def get_google_client():
-    """Get an authorized Google client, handling token refresh and authentication."""
+def get_google_creds():
+    """Get authorized Google credentials, supporting both Service Account and OAuth."""
     creds = None
+    
+    # 1. Try Service Account first (Easiest for new users)
+    if os.path.exists('service_account.json'):
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                'service_account.json', scopes=SCOPES)
+            return creds
+        except Exception as e:
+            print(f"Warning: Failed to load service_account.json: {e}")
+
+    # 2. Fallback to OAuth flow (credentials.json + token.json)
     try:
-        # Token file stores the user's access and refresh tokens
         if os.path.exists('token.json'):
             creds = Credentials.from_authorized_user_file('token.json', SCOPES)
 
-        # If no valid credentials available or token expired
         if not creds or not creds.valid:
-            # Try to refresh token if available
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
-                    print("Successfully refreshed authentication token")
-                except Exception as e:
-                    print(f"Error refreshing token: {e}")
-                    creds = None  # Reset creds to trigger new authentication
+                except Exception:
+                    creds = None
 
-            # If refresh failed or no refresh token available, get new credentials
             if not creds or not creds.valid:
-                try:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        'credentials.json', SCOPES)
-                    creds = flow.run_local_server(port=0)
-                    print("Successfully obtained new authentication credentials")
-                except Exception as e:
-                    raise Exception(f"Failed to authenticate: {e}")
+                if not os.path.exists('credentials.json'):
+                    raise Exception("Missing 'service_account.json' OR 'credentials.json'. "
+                                    "Please follow the setup guide to obtain credentials.")
+                
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
 
             # Save the new/refreshed credentials
-            try:
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
-                print("Successfully saved authentication credentials")
-            except Exception as e:
-                print(f"Warning: Failed to save credentials: {e}")
-
-        return gspread.authorize(creds)
-
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+        
+        return creds
     except Exception as e:
-        raise Exception(f"Authentication failed: {e}")
+        raise Exception(f"Google authentication failed: {e}")
+
+
+def get_google_client():
+    """Get an authorized gspread client."""
+    creds = get_google_creds()
+    return gspread.authorize(creds)
 
 
 def fit_score_to_enum(fit_score: str) -> int:
@@ -5862,8 +5868,21 @@ def setup_driver():
 
 
 def setup_spreadsheet(client, user_name):
-    """Open or create the spreadsheet"""
+    """
+    Open or create the spreadsheet.
+    If client is None, uses local CSV storage instead of Google Sheets.
+    """
     sheet_name = f"{user_name} LinkedIn Job Alerts"
+    
+    # Check if using local storage (client is None)
+    if client is None:
+        from local_storage import LocalSheet
+        csv_path = f"./local_data/jobs.csv"
+        sheet = LocalSheet(csv_path, SHEET_HEADER)
+        print(f"Using local CSV storage: {csv_path}")
+        return sheet
+    
+    # Use Google Sheets (existing behavior)
     try:
         sheet = client.open(sheet_name).sheet1
         return sheet

@@ -14,6 +14,7 @@ email_address = os.getenv("EMAIL_ADDRESS")
 linkedin_password = os.getenv("LINKEDIN_PASSWORD")
 CHECK_SUSTAINABILITY = os.getenv("CHECK_SUSTAINABILITY", "false").lower() == "true"
 CRAWL_LINKEDIN = os.getenv("CRAWL_LINKEDIN", "false").lower() == "true"
+USE_LOCAL_STORAGE = os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true"
 
 
 # --- Helper Methods for Refactoring (Implementations are placeholders) ---
@@ -462,22 +463,18 @@ def fetch_company_overviews(sheet, company_overview_cache):
 def upload_to_gdrive(file_path: str, filename: str) -> str:
     """
     Upload a file to Google Drive's Resumes directory and return its shareable URL.
-
-    Args:
-        file_path: Local path to the file
-        filename: Name to give the file in Drive
-
-    Returns:
-        Shareable URL of the uploaded file
+    If USE_LOCAL_STORAGE is enabled, saves to local directory instead.
     """
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-
+    if USE_LOCAL_STORAGE:
+        from local_storage import save_resume_local
+        # Read the file and save locally
+        with open(file_path, 'rb') as f:
+            pdf_bytes = f.read()
+        local_path = save_resume_local(pdf_bytes, filename)
+        return local_path
+    
+    # Google Drive upload (existing behavior)
+    creds = get_google_creds()
     service = build('drive', 'v3', credentials=creds)
 
     # Find or create Resumes folder
@@ -537,14 +534,21 @@ def upload_to_gdrive(file_path: str, filename: str) -> str:
 
 
 def delete_resume_from_gdrive(resume_url: str):
-    """Delete a resume from Google Drive and local Downloads"""
+    """
+    Delete a resume from Google Drive and local Downloads.
+    If USE_LOCAL_STORAGE is enabled, deletes from local directory instead.
+    """
     if not resume_url:
         return
 
+    if USE_LOCAL_STORAGE:
+        from local_storage import delete_resume_local
+        delete_resume_local(resume_url)
+        return
+
+    # Google Drive deletion (existing behavior)
     try:
-        creds = None
-        if os.path.exists('token.json'):
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        creds = get_google_creds()
         service = build('drive', 'v3', credentials=creds)
 
         # Extract file ID from URL
@@ -829,7 +833,19 @@ def process_cover_letter(sheet, row, idx, resume_json):
             feedback = row.get('CL feedback')
 
             tailored_cl = get_tailored_cl(resume_json, job_details, current_cl, feedback)
+            
+            # Store full text in sheet (same for both modes)
             update_cell(sheet, idx, 'Tailored cover letter (to be humanized)', tailored_cl)
+            
+            # Also save cover letter locally if USE_LOCAL_STORAGE is enabled
+            if USE_LOCAL_STORAGE:
+                from local_storage import save_cover_letter_local, get_local_file_path
+                from utils import get_user_name
+                user_name = get_user_name(resume_json).replace(' ', '_')
+                company_name = job_details['company_name'].replace(' ', '_')
+                filename = get_local_file_path(user_name, company_name, 'cover_letter')
+                save_cover_letter_local(tailored_cl, filename)
+            
             update_cell(sheet, idx, 'CL feedback addressed', 'TRUE')
             print(f"Regenerated cover letter for: {row.get('Job Title')}")
         except Exception as e:
@@ -841,7 +857,19 @@ def process_cover_letter(sheet, row, idx, resume_json):
         print(f"Generating cover letter for: {row.get('Job Title')} @ {row.get('Company Name')}")
         try:
             tailored_cl = get_tailored_cl(resume_json, job_details)
+            
+            # Store full text in sheet (same for both modes)
             update_cell(sheet, idx, 'Tailored cover letter (to be humanized)', tailored_cl)
+            
+            # Also save cover letter locally if USE_LOCAL_STORAGE is enabled
+            if USE_LOCAL_STORAGE:
+                from local_storage import save_cover_letter_local, get_local_file_path
+                from utils import get_user_name
+                user_name = get_user_name(resume_json).replace(' ', '_')
+                company_name = job_details['company_name'].replace(' ', '_')
+                filename = get_local_file_path(user_name, company_name, 'cover_letter')
+                save_cover_letter_local(tailored_cl, filename)
+            
             print(f"Generated cover letter for: {row.get('Job Title')}")
         except Exception as e:
             print(f"Error generating cover letter: {e}")
@@ -1039,17 +1067,39 @@ def collect_jobs_via_apify(sheet):
 
 def main():
     """Main loop that runs continuously"""
-    client = get_google_client()
-
+    import signal
+    
+    # Set up signal handler for graceful shutdown
+    shutdown_requested = False
+    
+    def signal_handler(signum, frame):
+        nonlocal shutdown_requested
+        print("\n\nShutdown signal received. Finishing current operation and exiting...")
+        shutdown_requested = True
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     from api_methods import get_resume_json
     resume_json = get_resume_json()
 
     user_name = get_user_name(resume_json)
+    
+    # Initialize storage based on USE_LOCAL_STORAGE flag
+    if USE_LOCAL_STORAGE:
+        print("Using local storage mode (CSV files)")
+        from local_storage import ensure_local_directories
+        ensure_local_directories()  # Ensure directories exist
+        client = None  # Not needed for local storage
+    else:
+        print("Using Google API mode (Google Sheets/Drive)")
+        client = get_google_client()
+    
     sheet = setup_spreadsheet(client, user_name)
 
     last_check_time = 0
 
-    while True:
+    while not shutdown_requested:
         try:
             current_time = time.time()
             time_since_last_check = current_time - last_check_time
@@ -1070,7 +1120,15 @@ def main():
             if not has_incomplete_jobs and time_since_last_check < 3600:  # 3600 seconds = 1 hour
                 sleep_time = 3600 - time_since_last_check
                 print(f"All jobs complete. Sleeping for {sleep_time / 60:.1f} minutes until next check...")
-                time.sleep(sleep_time)
+                print("(Press Ctrl+C to interrupt and exit)")
+                # Sleep in smaller chunks to allow interrupt
+                sleep_chunk = 5  # Sleep in 5-second chunks
+                slept = 0
+                while slept < sleep_time and not shutdown_requested:
+                    time.sleep(min(sleep_chunk, sleep_time - slept))
+                    slept += sleep_chunk
+                if shutdown_requested:
+                    break
             elif has_incomplete_jobs:
                 print(f"Found jobs with missing data. Processing immediately...")
 
@@ -1080,8 +1138,15 @@ def main():
 
             last_check_time = time.time()
 
+            # Check for shutdown request before starting processing
+            if shutdown_requested:
+                break
+            
             # 1. Collect new jobs (Apify + LinkedIn)
             collect_jobs_via_apify(sheet)
+
+            if shutdown_requested:
+                break
 
             if CRAWL_LINKEDIN:
                 from linkedin_scraper import actions
@@ -1129,13 +1194,18 @@ def main():
 
             # driver.quit()
         except KeyboardInterrupt:
-            print("\n\nShutting down gracefully...")
+            print("\n\nKeyboard interrupt received. Shutting down gracefully...")
+            shutdown_requested = True
+            break  # Exit the while loop
         except Exception as e:
+            if shutdown_requested:
+                break
             print(f"\n\nAn error occurred: {e}")
+            import traceback
+            traceback.print_exc()
             continue
-        finally:
-            # driver.quit()
-            print("Done!")
+    
+    print("\nShutdown complete. Goodbye!")
 
 
 if __name__ == "__main__":
