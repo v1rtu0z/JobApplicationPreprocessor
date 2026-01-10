@@ -2,7 +2,6 @@ from datetime import datetime
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from linkedin_scraper import actions
 
 from api_methods import *
 from utils import *
@@ -629,7 +628,9 @@ def validate_jobs_and_fetch_missing_data(driver, sheet):
             except (ValueError, TypeError):
                 pass  # Invalid timestamp, proceed with check
 
-        if not_logged_in:
+        if CRAWL_LINKEDIN and not_logged_in:
+            from linkedin_scraper import actions
+            
             actions.login(driver, email_address, linkedin_password)
             not_logged_in = False
 
@@ -639,6 +640,8 @@ def validate_jobs_and_fetch_missing_data(driver, sheet):
         if CRAWL_LINKEDIN:
             job_expired = check_job_expiration(driver, job_url)
             if job_expired is None:
+                from linkedin_scraper import actions
+
                 print(f"Error checking expiration for {job_url}. Resetting the driver and trying again...")
                 driver.quit()
                 del driver
@@ -1081,6 +1084,8 @@ def main():
             collect_jobs_via_apify(sheet)
 
             if CRAWL_LINKEDIN:
+                from linkedin_scraper import actions
+                
                 driver = setup_driver()
                 actions.login(driver, email_address, linkedin_password)
                 

@@ -13,13 +13,6 @@ from apify_client import ApifyClient
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from linkedin_scraper import Job
-from selenium import webdriver
-from selenium.common import TimeoutException, StaleElementReferenceException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-
-from custom_job_search import CustomJobSearch
 
 # Google Sheets OAuth setup
 SCOPES = ["https://www.googleapis.com/auth/drive",
@@ -70,6 +63,8 @@ def parse_job_url(driver, linkedin_url: str) -> dict:
     rate_limit()
 
     try:
+        from linkedin_scraper import Job
+        
         job_obj = Job(
             linkedin_url,
             driver=driver,
@@ -116,6 +111,8 @@ def scrape_multiple_pages(driver, search_url: str, max_pages: int = 5) -> list:
         print(f"  Scraping page {current_page}/{max_pages}")
 
         # Scrape current page
+        from custom_job_search import CustomJobSearch
+
         job_search = CustomJobSearch(driver=driver, close_on_complete=False, scrape=False)
         page_jobs = job_search.scrape_from_url(driver.current_url)
         all_jobs.extend(page_jobs)
@@ -124,6 +121,8 @@ def scrape_multiple_pages(driver, search_url: str, max_pages: int = 5) -> list:
 
         # Try to find and click next page button
         try:
+            from selenium.webdriver.common.by import By
+            
             next_button = driver.find_element(
                 By.CSS_SELECTOR,
                 'button[aria-label="View next page"].jobs-search-pagination__button--next'
@@ -156,6 +155,8 @@ def scrape_search_results(driver, search_url: str) -> list:
     rate_limit()
 
     try:
+        from custom_job_search import CustomJobSearch
+        
         job_search = CustomJobSearch(driver=driver, close_on_complete=False, scrape=False)
         job_listings = job_search.scrape_from_url(search_url)
         return job_listings
@@ -5851,8 +5852,12 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
 
 def setup_driver():
     """Initialize and return a headless Chrome driver"""
+    from selenium.webdriver.chrome.options import Options
+    
     options = Options()
     # options.add_argument('--headless=new')
+    from selenium import webdriver
+    
     return webdriver.Chrome(options=options)
 
 
@@ -5913,6 +5918,9 @@ def retry_on_selenium_error(max_retries=3, delay=5):
         def wrapper(*args, **kwargs):
             last_exception = None
             for attempt in range(max_retries):
+                from selenium.common import StaleElementReferenceException
+                from httpcore import TimeoutException
+
                 try:
                     return func(*args, **kwargs)
                 except (StaleElementReferenceException, TimeoutException, TimeoutError) as e:
