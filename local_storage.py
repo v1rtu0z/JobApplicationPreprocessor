@@ -27,18 +27,23 @@ class LocalSheet:
         if not self.csv_path.exists():
             self.csv_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+                f.write("sep=,\n")
                 writer = csv.writer(f)
                 writer.writerow(self.header)
         else:
             # Verify header matches
             with open(self.csv_path, 'r', encoding='utf-8') as f:
-                reader = csv.reader(f)
+                line = f.readline()
+                if line.strip() == "sep=,":
+                    reader = csv.reader(f)
+                else:
+                    # No sep=, line, reset to start
+                    f.seek(0)
+                    reader = csv.reader(f)
+                
                 existing_header = next(reader, None)
                 if existing_header != self.header:
-                    # If header doesn't match, we'll need to handle this
-                    # For now, assume it's correct or recreate
-                    if existing_header != self.header:
-                        print(f"Warning: CSV header mismatch. Expected {len(self.header)} columns, found {len(existing_header) if existing_header else 0}")
+                    print(f"Warning: CSV header mismatch. Expected {len(self.header)} columns, found {len(existing_header) if existing_header else 0}")
     
     def get_all_records(self) -> List[Dict[str, str]]:
         """
@@ -50,6 +55,10 @@ class LocalSheet:
             return records
         
         with open(self.csv_path, 'r', encoding='utf-8') as f:
+            line = f.readline()
+            if line.strip() != "sep=,":
+                f.seek(0)
+            
             reader = csv.DictReader(f)
             for row in reader:
                 # Convert empty strings to empty strings (keep as is)
@@ -229,6 +238,7 @@ class LocalSheet:
     def _write_all_records(self, records: List[Dict[str, str]]):
         """Write all records back to CSV file."""
         with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+            f.write("sep=,\n")
             writer = csv.DictWriter(f, fieldnames=self.header)
             writer.writeheader()
             writer.writerows(records)

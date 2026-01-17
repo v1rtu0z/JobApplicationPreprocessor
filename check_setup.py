@@ -38,7 +38,7 @@ def check_setup():
     if os.path.exists('.env'):
         print("  ✅ .env file found")
         load_dotenv()
-        required_vars = ['EMAIL_ADDRESS', 'GEMINI_API_KEY', 'APIFY_API_TOKEN']
+        required_vars = ['EMAIL_ADDRESS', 'GEMINI_API_KEY', 'APIFY_API_TOKEN', 'SERVER_URL']
         for var in required_vars:
             if os.getenv(var):
                 print(f"  ✅ {var} is set")
@@ -48,8 +48,12 @@ def check_setup():
         print("  ❌ .env file NOT FOUND")
 
     # 4. Check Google Credentials
+    # ... (skipping credentials check for brevity in search_replace if needed, but I'll include it)
     print("\n🔑 Checking Google Credentials:")
-    if os.path.exists('service_account.json'):
+    use_local = os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true"
+    if use_local:
+        print("  ✅ USE_LOCAL_STORAGE is enabled (Google credentials optional)")
+    elif os.path.exists('service_account.json'):
         print("  ✅ service_account.json found (Method A)")
     elif os.path.exists('credentials.json'):
         print("  ✅ credentials.json found (Method B)")
@@ -62,7 +66,19 @@ def check_setup():
 
     # 5. Check Personalization files
     print("\n👤 Checking Personalization Files:")
-    for f in ['resume_data.json', 'additional details.txt']:
+    resume_found = os.path.exists('resume_data.json')
+    if resume_found:
+        print("  ✅ resume_data.json found")
+    else:
+        resume_pdf = os.getenv("RESUME_PDF_PATH")
+        if resume_pdf and os.path.exists(resume_pdf):
+            print(f"  ✅ resume_data.json missing but will be created from: {resume_pdf}")
+        elif resume_pdf:
+            print(f"  ❌ resume_data.json missing and RESUME_PDF_PATH file NOT FOUND: {resume_pdf}")
+        else:
+            print("  ❌ resume_data.json missing and RESUME_PDF_PATH not set in .env")
+
+    for f in ['additional_details.txt']:
         if os.path.exists(f):
             print(f"  ✅ {f} found")
         else:

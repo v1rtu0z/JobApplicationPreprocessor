@@ -23,6 +23,9 @@ SCOPES = ["https://www.googleapis.com/auth/drive",
 # Global variable to track last request time
 last_request_time = 0
 
+# Global variable to track Apify availability
+APIFY_AVAILABLE = True
+
 
 def rate_limit():
     """Ensure at least 1 second has passed since last request"""
@@ -246,6 +249,11 @@ def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, 
         Dict mapping company name -> company overview
     """
     if not company_names:
+        return {}
+
+    global APIFY_AVAILABLE
+    if not APIFY_AVAILABLE:
+        print("Apify is currently unavailable (usage limit reached). Skipping company overview fetch.")
         return {}
 
     print(f"Fetching {len(company_names)} company overviews via Apify in bulk...")
@@ -5418,19 +5426,12 @@ def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, 
         return company_map
 
     except Exception as e:
-        print(f"Error in bulk Apify fetch: {e}")
+        error_msg = str(e)
+        print(f"Error in bulk Apify fetch: {error_msg}")
+        if "Monthly usage hard limit exceeded" in error_msg:
+            print("CRITICAL: Apify monthly usage hard limit reached. Disabling Apify for this run.")
+            APIFY_AVAILABLE = False
         return {}
-
-
-ITA_SEARCH_URL = 'https://www.linkedin.com/jobs/search/?currentJobId=4312026327&f_E=3%2C4&f_TPR=r604800&f_WT=2&geoId=103350119&keywords=(software%20OR%20%22data%20Engineer%22%20OR%20Backend%20OR%20%22back%20End%22%20OR%20%22ai%20Engineer%22%20OR%20%22aritifical%20Inteligence%20Engineer%22%20OR%20%22ml%20Engineer%22)%20AND%20NOT%20(%22php%22%20OR%20%22full%20Stack%22%20OR%20%22kubernetes%22%20OR%20%22frontend%22%20OR%20%22android%22%20OR%20%22angular%22%20OR%20%22network%22%20OR%20%22manager%22%20OR%20%22research%22)&origin=JOB_SEARCH_PAGE_LOCATION_HISTORY&refresh=True&sortBy=R'
-RM_SEARCH_URL = 'https://www.linkedin.com/jobs/search/?currentJobId=4313461130&f_E=3%2C4&f_TPR=r604800&f_WT=1%2C2%2C3&geoId=106398949&keywords=(software%20OR%20%22data%20Engineer%22%20OR%20Backend%20OR%20%22back%20End%22%20OR%20%22ai%20Engineer%22%20OR%20%22aritifical%20Inteligence%20Engineer%22%20OR%20%22ml%20Engineer%22)%20AND%20NOT%20(%22php%22%20OR%20%22full%20Stack%22%20OR%20%22kubernetes%22%20OR%20%22frontend%22%20OR%20%22android%22%20OR%20%22angular%22%20OR%20%22network%22%20OR%20%22manager%22%20OR%20%22research%22)&origin=JOB_SEARCH_PAGE_JOB_FILTER&refresh=True&sortBy=R'
-SRB_SEARCH_URL = 'https://www.linkedin.com/jobs/search/?currentJobId=4288592065&f_E=3%2C4&f_TPR=r604800&f_WT=2&geoId=101855366&keywords=(software%20OR%20%22data%20Engineer%22%20OR%20Backend%20OR%20%22back%20End%22%20OR%20%22ai%20Engineer%22%20OR%20%22aritifical%20Inteligence%20Engineer%22%20OR%20%22ml%20Engineer%22)%20AND%20NOT%20(%22php%22%20OR%20%22full%20Stack%22%20OR%20%22kubernetes%22%20OR%20%22frontend%22%20OR%20%22android%22%20OR%20%22angular%22%20OR%20%22network%22%20OR%20%22manager%22%20OR%20%22research%22)&origin=JOB_SEARCH_PAGE_LOCATION_AUTOCOMPLETE&refresh=True&sortBy=R'
-EU_SEARCH_URL = 'https://www.linkedin.com/jobs/search/?currentJobId=4312048028&f_E=3%2C4&f_TPR=r604800&f_WT=2&geoId=91000000&keywords=(software%20OR%20%22data%20Engineer%22%20OR%20Backend%20OR%20%22back%20End%22%20OR%20%22ai%20Engineer%22%20OR%20%22aritifical%20Inteligence%20Engineer%22%20OR%20%22ml%20Engineer%22)%20AND%20NOT%20(%22php%22%20OR%20%22full%20Stack%22%20OR%20%22kubernetes%22%20OR%20%22frontend%22%20OR%20%22android%22%20OR%20%22angular%22%20OR%20%22network%22%20OR%20%22manager%22%20OR%20%22research%22)&origin=JOB_SEARCH_PAGE_SEARCH_BUTTON&refresh=True&sortBy=R'
-THAI_SEARCH_URL = 'https://www.linkedin.com/jobs/search/?currentJobId=4316904406&f_E=3%2C4&f_TPR=r604800&f_WT=1%2C3%2C2&geoId=105146118&keywords=(software%20OR%20%22data%20Engineer%22%20OR%20Backend%20OR%20%22back%20End%22%20OR%20%22ai%20Engineer%22%20OR%20%22aritifical%20Inteligence%20Engineer%22%20OR%20%22ml%20Engineer%22)%20AND%20NOT%20(%22php%22%20OR%20%22full%20Stack%22%20OR%20%22kubernetes%22%20OR%20%22frontend%22%20OR%20%22android%22%20OR%20%22angular%22%20OR%20%22network%22%20OR%20%22manager%22%20OR%20%22research%22)&origin=JOB_SEARCH_PAGE_JOB_FILTER&refresh=True&sortBy=R'
-SNGPR_SEARCH_URL = 'https://www.linkedin.com/jobs/search/?currentJobId=4317574441&f_E=3%2C4&f_TPR=r604800&f_WT=1%2C3%2C2&geoId=102454443&keywords=(software%20OR%20%22data%20Engineer%22%20OR%20Backend%20OR%20%22back%20End%22%20OR%20%22ai%20Engineer%22%20OR%20%22aritifical%20Inteligence%20Engineer%22%20OR%20%22ml%20Engineer%22)%20AND%20NOT%20(%22php%22%20OR%20%22full%20Stack%22%20OR%20%22kubernetes%22%20OR%20%22frontend%22%20OR%20%22android%22%20OR%20%22angular%22%20OR%20%22network%22%20OR%20%22manager%22%20OR%20%22research%22)&origin=JOB_SEARCH_PAGE_LOCATION_AUTOCOMPLETE&refresh=True&sortBy=R'
-Philippines_SEARCH_URL = 'https://www.linkedin.com/jobs/search/?currentJobId=4316912580&f_E=3%2C4&f_TPR=r604800&f_WT=1%2C3%2C2&geoId=103121230&keywords=(software%20OR%20%22data%20Engineer%22%20OR%20Backend%20OR%20%22back%20End%22%20OR%20%22ai%20Engineer%22%20OR%20%22aritifical%20Inteligence%20Engineer%22%20OR%20%22ml%20Engineer%22)%20AND%20NOT%20(%22php%22%20OR%20%22full%20Stack%22%20OR%20%22kubernetes%22%20OR%20%22frontend%22%20OR%20%22android%22%20OR%20%22angular%22%20OR%20%22network%22%20OR%20%22manager%22%20OR%20%22research%22)&origin=JOB_SEARCH_PAGE_SEARCH_BUTTON&refresh=True&sortBy=R'
-SEARCH_URLS = [ITA_SEARCH_URL, RM_SEARCH_URL, SRB_SEARCH_URL, EU_SEARCH_URL, THAI_SEARCH_URL, SNGPR_SEARCH_URL,
-               Philippines_SEARCH_URL]
 
 SHEET_HEADER = [
     'Company Name', 'Job Title', 'Location', 'Location Priority', 'Job Description', 'Job URL', 'Company URL',
@@ -5757,7 +5758,7 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
             continue
 
         # Skip if already has definitive sustainable company value
-        sustainable_value = row.get('Sustainable company', '').strip()
+        sustainable_value = str(row.get('Sustainable company', '')).strip().upper()
         if sustainable_value in ['TRUE', 'FALSE']:
             continue
 
@@ -5815,8 +5816,13 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
             sustainability_value = 'TRUE' if is_sustainable else 'FALSE'
             
             # Find all rows with this company name and prepare updates
+            # Case-insensitive match, and handle possible sub-string matches or trailing/leading spaces
+            search_name = company_name.strip().lower()
             for idx, row in enumerate(all_rows, start=2):
-                if row.get('Company Name', '').strip().lower() == company_name.lower():
+                row_company = row.get('Company Name', '').strip().lower()
+                
+                # Check for exact match or close match
+                if row_company == search_name or search_name in row_company or row_company in search_name:
                     # Sustainability field
                     bulk_updates.append({
                         'range': f'{sc_col}{idx}',
@@ -5999,6 +6005,11 @@ def fetch_jobs_via_apify(search_url: str) -> list[dict]:
     """
     Fetch jobs from LinkedIn via Apify Actor using parameters extracted from search_url.
     """
+    global APIFY_AVAILABLE
+    if not APIFY_AVAILABLE:
+        print("Apify is currently unavailable (usage limit reached). Skipping job fetch.")
+        return []
+
     from main import APIFY_API_TOKEN
     
     parsed_url = urlparse(search_url)
@@ -6074,6 +6085,7 @@ def fetch_jobs_via_apify(search_url: str) -> list[dict]:
     }
     
     print(f"Running Apify Actor for keywords: '{keywords}' in location: '{location}'")
+    
     client = ApifyClient(APIFY_API_TOKEN)
     
     try:
@@ -6111,5 +6123,9 @@ def fetch_jobs_via_apify(search_url: str) -> list[dict]:
         print(f"Fetched {len(items)} jobs from Apify.")
         return items
     except Exception as e:
-        print(f"Error running Apify Actor: {e}")
+        error_msg = str(e)
+        print(f"Error running Apify Actor: {error_msg}")
+        if "Monthly usage hard limit exceeded" in error_msg:
+            print("CRITICAL: Apify monthly usage hard limit reached. Disabling Apify for this run.")
+            APIFY_AVAILABLE = False
         return []

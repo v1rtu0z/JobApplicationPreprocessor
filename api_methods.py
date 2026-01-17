@@ -4,11 +4,18 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 import requests
+from PyPDF2 import PdfReader
+from pdfminer.high_level import extract_text as extract_text_miner
+from pdfminer.layout import LAParams, LTTextBox, LTTextLine
+from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+from pdfminer.converter import PDFPageAggregator
 from dotenv import load_dotenv
 
+from tkinter import Tk, filedialog
 from utils import get_user_name
 
 load_dotenv()
@@ -17,6 +24,7 @@ SERVER_URL = os.getenv("SERVER_URL")
 EXTENSION_SECRET_KEY = os.getenv("API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 BACKUP_GEMINI_API_KEY = os.getenv("BACKUP_GEMINI_API_KEY")
+RESUME_PDF_PATH = os.getenv("RESUME_PDF_PATH")
 
 # Cache for JWT token and resume JSON
 _jwt_token: Optional[str] = None
@@ -146,19 +154,122 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
     return None
 
 
-# TODO: Add a fallback to the API call in case that resume json data isn't available
+def create_resume_json_from_pdf(pdf_path: str) -> dict:
+    """
+    Call the /get-resume-json endpoint to convert a PDF resume to JSON.
+    """
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"Resume PDF not found at: {pdf_path}")
+
+    print(f"Converting resume PDF to JSON: {pdf_path}")
+    
+    # Extract text from PDF
+    try:
+        # Using pdfminer.six for better text extraction (similar to PDF.js used by the user)
+        # We mimic the provided TS logic: join items with spaces to avoid line-break issues
+        rsrcmgr = PDFResourceManager()
+        laparams = LAParams()
+        device = PDFPageAggregator(rsrcmgr, laparams=laparams)
+        interpreter = PDFPageInterpreter(rsrcmgr, device)
+        
+        pages_text = []
+        with open(pdf_path, 'rb') as fp:
+            for page in PDFPage.get_pages(fp):
+                interpreter.process_page(page)
+                layout = device.get_result()
+                page_items = []
+                for obj in layout:
+                    if isinstance(obj, (LTTextBox, LTTextLine)):
+                        page_items.append(obj.get_text().strip())
+                pages_text.append(" ".join(page_items))
+        
+        pdf_text = " ".join(pages_text)
+        
+        # If extraction produced almost no text, try a simpler extract_text_miner
+        if len(pdf_text.strip()) < 10:
+            print("Advanced extraction too short, trying extract_text_miner...")
+            pdf_text = extract_text_miner(pdf_path)
+
+        # If still too short, try PyPDF2 as fallback
+        if len(pdf_text.strip()) < 10:
+            print("pdfminer.six extraction too short, trying PyPDF2...")
+            reader = PdfReader(pdf_path)
+            pdf_text = ""
+            for page in reader.pages:
+                extracted_text = page.extract_text()
+                if extracted_text:
+                    pdf_text += extracted_text + "\n"
+        
+        # Final check
+        if len(pdf_text.strip()) < 10:
+            raise ValueError("Extracted text is too short, possible empty or image-based PDF")
+            
+    except Exception as e:
+        print(f"Warning: PDF text extraction failed or returned insufficient data: {e}")
+        print("Falling back to reading as text...")
+        with open(pdf_path, 'r', encoding='utf-8', errors='ignore') as f:
+            pdf_text = f.read()
+
+    payload = {
+        "resume_content": pdf_text,
+        'model_name': 'gemini-2.5-flash'
+    }
+    
+    headers = _get_auth_headers()
+    response = requests.post(
+        f"{SERVER_URL}/get-resume-json",
+        json=payload,
+        headers=headers
+    )
+    
+    if not response.ok:
+        raise Exception(f"Failed to convert resume PDF to JSON: {response.status_code} - {response.text}")
+    
+    data = response.json()
+    resume_data = data.get('resume_data')
+    
+    if not resume_data:
+        raise Exception("API returned success but no resume_data found in response")
+        
+    # Save it for later use
+    with open('./resume_data.json', 'w', encoding='utf-16') as f:
+        json.dump(resume_data, f, indent=2)
+    
+    print("Successfully created resume_data.json")
+    return resume_data
+
+
 def get_resume_json() -> dict:
     """
     Read resume from resume_data.json and add additional details.
     """
     try:
-        # Read the JSON file directly
-        with open('./resume_data.json', 'r') as f:
-            resume_data = json.load(f)
+        # Check if resume_data.json exists, if not try to create it from PDF
+        if not os.path.exists('./resume_data.json'):
+            pdf_path = RESUME_PDF_PATH
+            if not pdf_path:
+                print("RESUME_PDF_PATH not found in .env. Please select your resume PDF file...")
+                root = Tk()
+                root.withdraw()  # Hide the main tkinter window
+                root.attributes('-topmost', True)  # Bring to front
+                pdf_path = filedialog.askopenfilename(
+                    title="Select your resume PDF",
+                    filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
+                )
+                root.destroy()
+                
+                if not pdf_path:
+                    raise FileNotFoundError("No resume PDF selected and RESUME_PDF_PATH not set in .env")
+
+            resume_data = create_resume_json_from_pdf(pdf_path)
+        else:
+            # Read the JSON file directly
+            with open('./resume_data.json', 'r') as f:
+                resume_data = json.load(f)
 
         # Add additional details to resume JSON
         try:
-            with open('./additional details.txt', 'r') as f:
+            with open('./additional_details.txt', 'r') as f:
                 additional_details = f.read()
             resume_data['additional_details'] = additional_details
         except FileNotFoundError:
@@ -342,9 +453,41 @@ def get_tailored_cl(resume_json, job_details: dict, current_content: str = None,
     return data['content']
 
 
+def fit_score_to_enum(fit_score: str) -> int:
+    """Convert fit score text to numeric value for sorting"""
+    score_map = {
+        "Perfect Fit": 5,
+        "Great Fit": 4,
+        "Good Fit": 3,
+        "Okay Fit": 2,
+        "Poor Fit": 1,
+        "Very Poor Fit": 0
+    }
+    return score_map.get(fit_score, 0)
+
+
+def load_search_urls(file_path: str = 'search_urls.txt') -> list[str]:
+    """Read search URLs from a file, one per line."""
+    if not os.path.exists(file_path):
+        example_path = file_path + '.example'
+        if os.path.exists(example_path):
+            print(f"Warning: {file_path} not found. Using {example_path} instead.")
+            file_path = example_path
+        else:
+            print(f"Warning: {file_path} not found. Returning empty list.")
+            return []
+    
+    with open(file_path, 'r') as f:
+        urls = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+    return urls
+
+
+SEARCH_URLS = load_search_urls()
+
+
 def bulk_filter_jobs(job_titles: list[str], resume_json: dict, max_retries: int = 3) -> list[str]:
     """
-    Send batch of job titles to Gemini for bulk filtering.
+    Evaluate job titles against the resume and filter out poor fits.
 
     Args:
         job_titles: List of job titles to evaluate
@@ -359,10 +502,10 @@ def bulk_filter_jobs(job_titles: list[str], resume_json: dict, max_retries: int 
     """
     import google.genai as genai
 
-    user_name = get_user_name(resume_json)
+    user_name_val = get_user_name(resume_json)
 
     # Prepare the prompt
-    prompt = f"""You are helping {user_name} filter job opportunities.
+    prompt = f"""You are helping {user_name_val} filter job opportunities.
 
 Resume JSON:
 {json.dumps(resume_json, indent=2)}

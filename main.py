@@ -369,6 +369,11 @@ def fetch_company_overviews(sheet, company_overview_cache):
     Only processes jobs that don't have Poor/Very poor fit scores.
     Uses bulk Apify fetching for efficiency.
     """
+    import utils
+    if not utils.APIFY_AVAILABLE:
+        print("\nApify is currently unavailable (usage limit reached). Skipping company overview fetching.")
+        return 0
+
     print("\n" + "=" * 60)
     print("COMPANY OVERVIEW PHASE: Fetching missing company overviews")
     print("=" * 60 + "\n")
@@ -381,10 +386,8 @@ def fetch_company_overviews(sheet, company_overview_cache):
 
     for idx, row in enumerate(all_rows, start=2):
         # Skip if already has company overview
-        if row.get('Company overview'):
-            continue
-
-        if row.get('Fit score'):
+        co_val = row.get('Company overview')
+        if co_val and str(co_val).strip():
             continue
 
         if row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get(
@@ -417,6 +420,9 @@ def fetch_company_overviews(sheet, company_overview_cache):
     batch_size = 1000
 
     for i in range(0, len(companies_to_fetch), batch_size):
+        if not utils.APIFY_AVAILABLE:
+            break
+            
         batch = companies_to_fetch[i:i + batch_size]
         print(f"\nFetching batch of {len(batch)} companies...")
 
@@ -434,15 +440,25 @@ def fetch_company_overviews(sheet, company_overview_cache):
         for company_name, overview in overview_map.items():
             company_overview_cache[company_name] = overview
 
-            # Add all updates for this company to bulk updates
-            if company_name in row_indices:
-                for row_idx in row_indices[company_name]: 
-                    bulk_updates.append({
-                        'range': f'{co_col_letter}{row_idx}',
-                        'values': [[overview]]
-                    })
-                    fetched_count += 1
-            else:
+            # Find matching companies in tracking map (case-insensitive)
+            matched = False
+            c_lower = company_name.lower()
+            
+            for tracking_name, indices in row_indices.items():
+                t_lower = tracking_name.lower()
+                
+                # Check if one is a substring of another or they match closely
+                if c_lower in t_lower or t_lower in c_lower:
+                    for row_idx in indices:
+                        bulk_updates.append({
+                            'range': f'{co_col_letter}{row_idx}',
+                            'values': [[overview]]
+                        })
+                        fetched_count += 1
+                    matched = True
+                    # Continue searching other tracking names as multiple might match
+            
+            if not matched:
                 print(f"Warning: Company {company_name} returned from Apify but not found in tracking map")
 
         # Execute bulk update in chunks to avoid limits
@@ -801,7 +817,10 @@ def analyze_all_jobs(sheet, resume_json):
         if row.get('Job posting expired') == 'TRUE' or not row.get('Job Description') or not row.get('Company overview'):
             continue
             
-        if CHECK_SUSTAINABILITY and not row.get('Sustainable company'):
+        if row.get('Fit score'):
+            continue
+
+        if CHECK_SUSTAINABILITY and row.get('Sustainable company', '').strip().upper() != 'TRUE':
             continue
 
         fit_score = analyze_single_job(sheet, row, idx, resume_json)
@@ -980,6 +999,11 @@ def collect_jobs_via_apify(sheet):
     """
     Collect jobs using Apify Actor, apply keyword filters, and add basic info to sheet.
     """
+    import utils
+    if not utils.APIFY_AVAILABLE:
+        print("Apify is currently unavailable (usage limit reached). Skipping collection phase.")
+        return 0
+
     print("\n" + "=" * 60)
     print("COLLECTION PHASE (Apify): Gathering jobs from LinkedIn via Apify")
     print("=" * 60 + "\n")
@@ -989,6 +1013,9 @@ def collect_jobs_via_apify(sheet):
     new_rows = []
 
     for search_url in SEARCH_URLS:
+        if not utils.APIFY_AVAILABLE:
+            break
+            
         print(f"Fetching jobs for search URL via Apify: {search_url}")
         job_items = fetch_jobs_via_apify(search_url)
 
@@ -1071,6 +1098,7 @@ def collect_jobs_via_apify(sheet):
 def main():
     """Main loop that runs continuously"""
     import signal
+    import utils
     
     # Set up signal handler for graceful shutdown
     shutdown_requested = False
@@ -1109,17 +1137,28 @@ def main():
             current_time = time.time()
             time_since_last_check = current_time - last_check_time
 
-            # Check if there are jobs with missing data
+            # Check if there are jobs with missing data that we can actually fetch
             all_rows = sheet.get_all_records()
             has_incomplete_jobs = any(
                 row.get('Job Title') and
-                not row.get('Fit score') in ['Poor fit', 'Very poor fit', ''] and
                 (
                     (not row.get('Job Description') and CRAWL_LINKEDIN) or 
-                    not row.get('Company overview')
+                    (not row.get('Company overview') and utils.APIFY_AVAILABLE) or
+                    (CHECK_SUSTAINABILITY and row.get('Sustainable company', '').strip() not in ['TRUE', 'FALSE'] and not row.get('Fit score') and (row.get('Company overview') or utils.APIFY_AVAILABLE)) or
+                    (not row.get('Fit score') and (row.get('Company overview') or utils.APIFY_AVAILABLE) and (row.get('Job Description') or CRAWL_LINKEDIN))
                 )
-                for row in all_rows
+                for row in all_rows if row.get('Applied') != 'TRUE' and row.get('Bad analysis') != 'TRUE' and row.get('Job posting expired') != 'TRUE'
             )
+
+            # Check if there's nothing else to do
+            nothing_else_to_do = not has_incomplete_jobs and not CRAWL_LINKEDIN and not utils.APIFY_AVAILABLE
+            if nothing_else_to_do:
+                print("\n" + "!" * 60)
+                print("NOTHING ELSE TO DO: Apify is unavailable, LinkedIn crawling is disabled, and no pending jobs found.")
+                print("Stopping application.")
+                print("!" * 60 + "\n")
+                shutdown_requested = True
+                break
 
             # Only do long sleep if all jobs are complete
             if not has_incomplete_jobs and time_since_last_check < 3600:  # 3600 seconds = 1 hour

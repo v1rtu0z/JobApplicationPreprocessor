@@ -2,7 +2,9 @@
 /.env
 /token.json
 /resume_data.json
-/additional details.txt
+/additional_details.txt
 /.idea
 /__pycache__
 /local_data/jobs.csv
+.gitignore
+search_urls.txt
