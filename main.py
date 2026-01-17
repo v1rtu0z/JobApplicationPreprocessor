@@ -40,6 +40,7 @@ def _get_job_filters():
 
 def _check_and_process_filters(job_title, company_name, raw_location, company_overview='', job_description='',
                                sheet=None):
+    from linkedin_scraper import Job
     """Checks job details against skip keywords and prepares analysis data."""
     filters = _get_job_filters()
 
@@ -103,6 +104,7 @@ def _build_company_overview_cache(sheet):
 
 
 def collect_and_filter_jobs(driver, sheet):
+    from linkedin_scraper import Job
     """
     Collect all jobs from search URLs, apply keyword filters, and add basic info to sheet.
     Returns list of job URLs that need detailed scraping.
@@ -581,6 +583,7 @@ def delete_resume_from_gdrive(resume_url: str):
 
 
 def validate_jobs_and_fetch_missing_data(driver, sheet):
+    from linkedin_scraper import Job
     """
     Validate non-applied good-fit jobs (check expiration, apply filters).
     Also fetches missing Job Descriptions, Locations, and stores Company URLs.
@@ -1079,6 +1082,8 @@ def main():
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    if hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, signal_handler)
     
     from api_methods import get_resume_json
     resume_json = get_resume_json()

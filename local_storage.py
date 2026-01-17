@@ -253,7 +253,7 @@ class LocalSheet:
 
 def ensure_local_directories():
     """Ensure local storage directories exist."""
-    base_dir = Path('./local_data')
+    base_dir = Path('local_data')
     resumes_dir = base_dir / 'resumes'
     cover_letters_dir = base_dir / 'cover_letters'
     
@@ -282,7 +282,7 @@ def save_resume_local(pdf_bytes: bytes, filename: str) -> str:
         f.write(pdf_bytes)
     
     # Return relative path
-    return f"./local_data/resumes/{filename}"
+    return str(Path("local_data") / "resumes" / filename)
 
 
 def save_cover_letter_local(cover_letter_text: str, filename: str) -> str:
@@ -308,7 +308,7 @@ def save_cover_letter_local(cover_letter_text: str, filename: str) -> str:
         f.write(cover_letter_text)
     
     # Return relative path
-    return f"./local_data/cover_letters/{filename}"
+    return str(Path("local_data") / "cover_letters" / filename)
 
 
 def delete_resume_local(resume_path: str):
@@ -326,12 +326,13 @@ def delete_resume_local(resume_path: str):
         return
     
     # Handle relative paths
+    path_obj = Path(resume_path)
     if resume_path.startswith('./'):
-        file_path = Path(resume_path)
+        file_path = path_obj
     elif resume_path.startswith('local_data/'):
-        file_path = Path('./') / resume_path
+        file_path = Path('.') / path_obj
     else:
-        file_path = Path(resume_path)
+        file_path = path_obj
     
     try:
         if file_path.exists():

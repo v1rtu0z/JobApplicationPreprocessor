@@ -2,6 +2,7 @@ import json
 import os
 import random
 import time
+from pathlib import Path
 from functools import wraps
 from typing import Any
 
@@ -5877,8 +5878,8 @@ def setup_spreadsheet(client, user_name):
     # Check if using local storage (client is None)
     if client is None:
         from local_storage import LocalSheet
-        csv_path = f"./local_data/jobs.csv"
-        sheet = LocalSheet(csv_path, SHEET_HEADER)
+        csv_path = Path("local_data") / "jobs.csv"
+        sheet = LocalSheet(str(csv_path), SHEET_HEADER)
         print(f"Using local CSV storage: {csv_path}")
         return sheet
     
