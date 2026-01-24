@@ -1,0 +1,71 @@
+# =============================================================================
+# Job Filtering & Personalization Configuration
+# =============================================================================
+# This file allows you to customize which jobs are skipped, how they are prioritized,
+# and what criteria are used for sustainability analysis.
+
+# -----------------------------------------------------------------------------
+# Keyword-based Filtering (Negative Filters)
+# -----------------------------------------------------------------------------
+# Jobs matching these keywords will be marked as "Poor fit" or "Very poor fit"
+# and will NOT be processed further (saving LLM and Apify costs).
+
+# Exact substrings found anywhere in the job title (case-insensitive)
+job_title_skip_keywords:
+  - azure
+  - java
+  - react
+  - frontend
+  - manager
+
+# Whole words found in the job title (useful for short acronyms like SAP)
+job_title_skip_keywords_2:
+  - sap
+
+# Keywords found in the company name (case-insensitive)
+company_skip_keywords:
+  - deel
+
+# Keywords found in the location string (case-insensitive)
+location_skip_keywords:
+  - czechia
+  - poland
+
+# -----------------------------------------------------------------------------
+# Location Priorities (Positive Filters)
+# -----------------------------------------------------------------------------
+# Lower numbers = higher priority (e.g., 1 is top priority).
+# Jobs matching these locations will be sorted to the top of the list.
+# This section is optional. If empty or missing, all locations have equal priority.
+location_priorities:
+  italy: 1
+  italia: 1
+  european union: 2
+  serbia: 3
+  remote: 1
+
+# -----------------------------------------------------------------------------
+# Sustainability Criteria (Optional)
+# -----------------------------------------------------------------------------
+# Used only if CHECK_SUSTAINABILITY=true in your .env file.
+# These lists help the LLM determine if a company is "sustainable".
+sustainability_criteria:
+  positive:
+    - Renewable energy, clean tech, environmental protection
+    - Healthcare, medical research, medical devices
+    - Education, academic institutions, learning platforms
+  negative:
+    - Weapons, arms, defense contractors, military equipment
+    - Fossil fuels, oil & gas, petroleum, coal
+    - Tobacco, cigarettes, vaping products
+    - Gambling, casinos, betting
+    - Predatory lending, payday loans
+    - Harmful addictions or exploitative industries
+
+# -----------------------------------------------------------------------------
+# General Settings
+# -----------------------------------------------------------------------------
+general_settings:
+  # The theme used for generating the tailored resume PDF.
+  # Options depend on what the CV rendering server supports (e.g., engineeringclassic)
+  resume_theme: engineeringclassic

@@ -5,6 +5,7 @@ from googleapiclient.http import MediaFileUpload
 
 from api_methods import *
 from utils import *
+from config import _get_job_filters, _save_job_filters
 from utils import retry_on_selenium_error
 
 load_dotenv()
@@ -17,25 +18,7 @@ CRAWL_LINKEDIN = os.getenv("CRAWL_LINKEDIN", "false").lower() == "true"
 USE_LOCAL_STORAGE = os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true"
 
 
-# --- Helper Methods for Refactoring (Implementations are placeholders) ---
-
-def _get_job_filters():
-    """Returns the job filtering keywords."""
-    return {
-        'job_title_skip_keywords': [
-            'azure', 'java', 'react', 'fullstack', 'full stack', 'full-stack', 'frontend', 'front end', 'front-end',
-            'customer support', 'recruiter', 'flutter', 'go', '.net', 'writer', 'ios', 'android', 'mobile',
-            'mobile app', 'manager', 'wordpress', 'payroll', 'account executive', 'sales', 'sales manager',
-            'c#', 'vue.js', 'node.js', 'dot net', 'accountant', 'web design', 'web3'
-        ],
-        'job_title_skip_keywords_2': [
-            'sap'
-        ],
-        'company_skip_keywords': ['deel', 'allcore s.p.A.'],
-        'location_skip_keywords': [
-            'czechia', 'poland', 'hungary', 'romania', 'slovakia', 'malta', 'lithuania', 'latvia', 'belgium'
-        ]
-    }
+# --- Main Loop ---
 
 
 def _check_and_process_filters(job_title, company_name, raw_location, company_overview='', job_description='',
@@ -101,6 +84,8 @@ def _build_company_overview_cache(sheet):
         if company_name and company_overview and company_name not in cache:
             cache[company_name] = company_overview
     return cache
+
+# TODO: Migrate the sheet from gsheets to csv so that the company caching would be more effective
 
 
 def collect_and_filter_jobs(driver, sheet):
@@ -211,11 +196,14 @@ def collect_and_filter_jobs(driver, sheet):
     return jobs_to_scrape
 
 
-def bulk_filter_collected_jobs(sheet, resume_json):
+def bulk_filter_collected_jobs(sheet, resume_json, target_indices=None, force_process=False):
     """
     Apply bulk LLM filtering to jobs that passed keyword filters.
     Groups jobs in batches and marks poor fits.
     Only processes jobs that haven't been bulk filtered yet.
+    If target_indices is provided, only processes those rows.
+    
+    If force_process is False, it will only call the LLM if there are at least 100 jobs.
     """
     print("\n" + "=" * 60)
     print("BULK FILTERING: Using LLM to filter collected jobs")
@@ -228,6 +216,10 @@ def bulk_filter_collected_jobs(sheet, resume_json):
     jobs_to_mark_filtered = []  # Jobs that just need 'Bulk filtered' = TRUE
 
     for idx, row in enumerate(all_rows, start=2):
+        # If target_indices is provided, skip if not in target
+        if target_indices is not None and idx not in target_indices:
+            continue
+
         # Skip if already bulk filtered
         if row.get('Bulk filtered') == 'TRUE':
             continue
@@ -277,20 +269,53 @@ def bulk_filter_collected_jobs(sheet, resume_json):
         print("No jobs to bulk filter")
         return 0
 
+    batch_size = 100
+    
+    # Only process if we have at least batch_size jobs or if forced
+    if len(jobs_to_filter) < batch_size and not force_process:
+        print(f"Holding {len(jobs_to_filter)} jobs for batching (need {batch_size} to call LLM)")
+        return 0
+
     print(f"Found {len(jobs_to_filter)} jobs to bulk filter")
 
-    batch_size = 100
     total_filtered = 0
+    filters_updated = False
+    current_filters = _get_job_filters()
 
     for i in range(0, len(jobs_to_filter), batch_size):
         batch = jobs_to_filter[i:i + batch_size]
-        batch_titles = [job['title'] for job in batch]
+        
+        # Don't process final small batch unless forced
+        if len(batch) < batch_size and not force_process:
+            print(f"Holding remaining {len(batch)} jobs for next batching cycle")
+            break
 
         print(f"\nProcessing batch {i // batch_size + 1} ({len(batch)} jobs)...")
 
         try:
             from api_methods import bulk_filter_jobs
-            filtered_titles = bulk_filter_jobs(batch_titles, resume_json, max_retries=3)
+            # Prepare data for LLM
+            llm_input = [{'title': job['title'], 'company': job['company']} for job in batch]
+            
+            result = bulk_filter_jobs(llm_input, resume_json, max_retries=3)
+            
+            filtered_titles = result.get('filtered_titles', [])
+            new_filters = result.get('new_filters', {})
+
+            # Update our YAML filters if new ones found
+            if new_filters:
+                for key, val in new_filters.items():
+                    if key in current_filters and val:
+                        # Append and deduplicate
+                        existing = set(current_filters[key])
+                        added = False
+                        for item in val:
+                            if item and item.lower() not in existing:
+                                current_filters[key].append(item)
+                                existing.add(item.lower())
+                                added = True
+                        if added:
+                            filters_updated = True
 
             # Get column letters once
             bulk_filtered_col = gspread.utils.rowcol_to_a1(1, get_column_index(sheet, 'Bulk filtered'))[0]
@@ -359,15 +384,20 @@ def bulk_filter_collected_jobs(sheet, resume_json):
 
             continue
 
-    print(f"\nBulk filtering completed. Filtered {total_filtered}/{len(jobs_to_filter)} jobs")
+    if filters_updated:
+        print("Saving updated filters to YAML...")
+        _save_job_filters(current_filters)
+
+    print(f"\nBulk filtering completed. Filtered {total_filtered} jobs")
     return total_filtered
 
 
-def fetch_company_overviews(sheet, company_overview_cache):
+def fetch_company_overviews(sheet, company_overview_cache, target_indices=None):
     """
     Fetch company overviews for jobs that are missing them.
     Only processes jobs that don't have Poor/Very poor fit scores.
     Uses bulk Apify fetching for efficiency.
+    If target_indices is provided, only processes those rows.
     """
     import utils
     if not utils.APIFY_AVAILABLE:
@@ -385,6 +415,10 @@ def fetch_company_overviews(sheet, company_overview_cache):
     row_indices = {}  # Map company name -> list of row indices
 
     for idx, row in enumerate(all_rows, start=2):
+        # If target_indices is provided, skip if not in target
+        if target_indices is not None and idx not in target_indices:
+            continue
+
         # Skip if already has company overview
         co_val = row.get('Company overview')
         if co_val and str(co_val).strip():
@@ -795,10 +829,11 @@ def analyze_single_job(sheet, row, idx, resume_json) -> str | None:
             return None
 
 
-def analyze_all_jobs(sheet, resume_json):
+def analyze_all_jobs(sheet, resume_json, target_indices=None):
     """
     First loop: Analyze all jobs that don't have a fit score yet.
     Returns the number of jobs analyzed.
+    If target_indices is provided, only processes those rows.
     """
     print("\n" + "=" * 60)
     print("ANALYSIS LOOP: Analyzing all unprocessed jobs")
@@ -811,6 +846,10 @@ def analyze_all_jobs(sheet, resume_json):
     for idx, row in enumerate(all_rows, start=2):  # start=2 because row 1 is headers
         if not row.get('Job Title'):
             break
+
+        # If target_indices is provided, skip if not in target
+        if target_indices is not None and idx not in target_indices:
+            continue
 
         # we skip jobs that are expired, filtered, or already analyzed
         # If sustainability check is disabled, we don't skip based on the 'Sustainable company' column
@@ -951,10 +990,11 @@ def process_resume(sheet, row, idx, resume_json):
             print(f"Error generating tailored resume: {e}")
 
 
-def process_resumes_and_cover_letters(sheet, resume_json):
+def process_resumes_and_cover_letters(sheet, resume_json, target_indices=None):
     """
     Second loop: Process resumes and cover letters for good fit jobs.
     Processes jobs in sorted order (by fit score and location priority).
+    If target_indices is provided, only processes those rows.
     """
     print("\n" + "=" * 60)
     print("PROCESSING LOOP: Generating resumes and cover letters")
@@ -966,6 +1006,10 @@ def process_resumes_and_cover_letters(sheet, resume_json):
     for idx, row in enumerate(all_rows, start=2):  # start=2 because row 1 is headers
         if not row.get('Job Title'):
             break
+
+        # If target_indices is provided, skip if not in target
+        if target_indices is not None and idx not in target_indices:
+            continue
 
         fit_score = row.get('Fit score')
 
@@ -995,14 +1039,16 @@ def process_resumes_and_cover_letters(sheet, resume_json):
     return processed_count
 
 
-def collect_jobs_via_apify(sheet):
+def collect_jobs_via_apify(sheet, search_url=None):
     """
     Collect jobs using Apify Actor, apply keyword filters, and add basic info to sheet.
+    If search_url is provided, only fetches for that URL.
+    Returns list of row indices of new jobs.
     """
     import utils
     if not utils.APIFY_AVAILABLE:
         print("Apify is currently unavailable (usage limit reached). Skipping collection phase.")
-        return 0
+        return []
 
     print("\n" + "=" * 60)
     print("COLLECTION PHASE (Apify): Gathering jobs from LinkedIn via Apify")
@@ -1011,13 +1057,15 @@ def collect_jobs_via_apify(sheet):
     existing_jobs = get_existing_jobs(sheet)
     filters = _get_job_filters()
     new_rows = []
+    
+    urls_to_process = [search_url] if search_url else SEARCH_URLS
 
-    for search_url in SEARCH_URLS:
+    for url in urls_to_process:
         if not utils.APIFY_AVAILABLE:
             break
             
-        print(f"Fetching jobs for search URL via Apify: {search_url}")
-        job_items = fetch_jobs_via_apify(search_url)
+        print(f"Fetching jobs for search URL via Apify: {url}")
+        job_items = fetch_jobs_via_apify(url)
 
         for item in job_items:
             try:
@@ -1085,14 +1133,18 @@ def collect_jobs_via_apify(sheet):
                 print(f"Unexpected error processing Apify job item: {item}. Error: {e}")
                 continue
 
+    new_indices = []
     if new_rows:
         print(f"Appending {len(new_rows)} new jobs to sheet...")
+        current_row_count = len(sheet.get_all_values())
         sheet.append_rows(new_rows)
+        # Calculate new indices (1-indexed, first row after existing)
+        new_indices = list(range(current_row_count + 1, current_row_count + 1 + len(new_rows)))
         print(f"Successfully added {len(new_rows)} jobs.")
     else:
         print("No new jobs found via Apify.")
 
-    return len(new_rows)
+    return new_indices
 
 
 def main():
@@ -1115,6 +1167,17 @@ def main():
     
     from api_methods import get_resume_json
     resume_json = get_resume_json()
+
+    # Ensure filters.yaml exists
+    if not os.path.exists('filters.yaml'):
+        import shutil
+        if os.path.exists('filters.yaml.example'):
+            print("Creating filters.yaml from example...")
+            shutil.copy('filters.yaml.example', 'filters.yaml')
+        else:
+            print("Creating default filters.yaml...")
+            filters = _get_job_filters()
+            _save_job_filters(filters)
 
     user_name = get_user_name(resume_json)
     
@@ -1187,8 +1250,40 @@ def main():
                 break
             
             # 1. Collect new jobs (Apify + LinkedIn)
-            collect_jobs_via_apify(sheet)
+            # Use incremental approach for Apify URLs
+            company_overview_cache = _build_company_overview_cache(sheet)
+            
+            for url in SEARCH_URLS:
+                if shutdown_requested:
+                    break
+                    
+                new_indices = collect_jobs_via_apify(sheet, search_url=url)
+                
+                if new_indices:
+                    print(f"\nProcessing {len(new_indices)} new jobs from current URL...")
+                    
+                    # 2. Bulk filter collected jobs (LLM)
+                    # Use force_process=False to batch up to 100
+                    bulk_filter_collected_jobs(sheet, resume_json, target_indices=new_indices, force_process=False)
 
+                    # 3. Enrich job data (Company overviews)
+                    fetch_company_overviews(sheet, company_overview_cache, target_indices=new_indices)
+
+                    # 4. Validate sustainability
+                    if CHECK_SUSTAINABILITY:
+                        print("\nValidating sustainability for new jobs...")
+                        validate_sustainability_for_unprocessed_jobs(sheet) # This still scans, but it's okay for now
+                    
+                    # 5. Single job analysis (LLM Fit Scoring)
+                    analyze_all_jobs(sheet, resume_json, target_indices=new_indices)
+
+                    # 6. Process resumes and cover letters
+                    process_resumes_and_cover_letters(sheet, resume_json, target_indices=new_indices)
+
+            # Final check for any leftover jobs that didn't reach batch size of 100
+            print("\nFinalizing processing cycle (processing leftover batches)...")
+            bulk_filter_collected_jobs(sheet, resume_json, force_process=True)
+            
             if shutdown_requested:
                 break
 
@@ -1204,35 +1299,26 @@ def main():
 
                 # Collect and filter jobs from search URLs
                 print("Collecting jobs from LinkedIn search results...")
-                collect_and_filter_jobs(driver, sheet)
+                jobs_to_scrape = collect_and_filter_jobs(driver, sheet)
+                
+                if jobs_to_scrape:
+                    # Process LinkedIn jobs
+                    li_indices = [idx for _, idx in jobs_to_scrape]
+                    
+                    # They still need scraping of descriptions
+                    validate_jobs_and_fetch_missing_data(driver, sheet)
+                    
+                    bulk_filter_collected_jobs(sheet, resume_json, target_indices=li_indices, force_process=False)
+                    fetch_company_overviews(sheet, company_overview_cache, target_indices=li_indices)
+                    analyze_all_jobs(sheet, resume_json, target_indices=li_indices)
+                    process_resumes_and_cover_letters(sheet, resume_json, target_indices=li_indices)
 
-            # 2. Bulk filter collected jobs (LLM)
-            print("\nApplying bulk LLM filtering...")
-            bulk_filter_collected_jobs(sheet, resume_json)
-
-            # 3. Enrich job data (Company overviews)
-            print("\nScraping detailed job information...")
-            company_overview_cache = _build_company_overview_cache(sheet)
-            fetch_company_overviews(sheet, company_overview_cache)
-
-            # 4. Validate sustainability
-            if CHECK_SUSTAINABILITY:
-                print("\nValidating sustainability for companies...")
-                validate_sustainability_for_unprocessed_jobs(sheet)
-            else:
-                print("\nSustainability check is disabled. Skipping...")
-
-            # 5. Single job analysis (LLM Fit Scoring)
-            print("\nAnalyzing all unprocessed jobs...")
-            analyze_all_jobs(sheet, resume_json)
-
+            # Final sorting and general cleanup/processing for any leftover jobs
+            print("\nFinalizing processing cycle...")
+            
             print("\nSorting sheet by fit score and location priority...")
             sheet.sort((get_column_index(sheet, 'Fit score enum'), 'des'),
                        (get_column_index(sheet, 'Location Priority'), 'asc'))
-
-            # 6. Process resumes and cover letters for good fit jobs
-            print("\nProcessing resumes and cover letters...")
-            process_resumes_and_cover_letters(sheet, resume_json)
 
             print(f"\nProcessing cycle completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 

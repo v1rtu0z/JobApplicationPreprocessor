@@ -14,6 +14,7 @@ To set up the Job Application Preprocessor on a new machine, follow these steps:
 Create a `.env` file in the project root with the following keys:
 *   `EMAIL_ADDRESS`: Your email address.
 *   `GEMINI_API_KEY`: Your Google AI Studio API key.
+*   `GEMINI_MODEL`: The Gemini model to use (default: `gemini-2.0-flash`).
 *   `APIFY_API_TOKEN`: Your Apify API token.
 *   `SERVER_URL`: The URL for the CV rendering server.
 *   `CHECK_SUSTAINABILITY`: Set to `true` or `false` to toggle sustainability analysis.
@@ -42,7 +43,8 @@ The project requires access to Google Sheets and Google Drive. You can use one o
 #### 4. Personalization Files
 Customize these files to tailor the AI's analysis to your profile:
 *   **`resume_data.json`**: Update with your structured education, experience, and skills.
-*   **`additional details.txt`**: Add your career goals, salary expectations, location preferences, and any specific constraints.
+*   **`additional_details.txt`**: Add your career goals, salary expectations, location preferences, and any specific constraints.
+*   **`filters.yaml`**: This file is automatically created on the first run using `filters.yaml.example` as a template (or with defaults). You can edit it to customize job title skip keywords, location priorities, and sustainability criteria.
 
 #### 5. Verify Setup
 Run the setup checker to ensure everything is configured correctly:

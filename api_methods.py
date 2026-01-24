@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 from tkinter import Tk, filedialog
 from utils import get_user_name
+from config import _get_job_filters
 
 load_dotenv()
 
@@ -60,7 +61,6 @@ def _authenticate() -> Optional[str]:
 
         # Decode JWT to get expiry (simple approach - subtract 60s for safety)
         # For production, consider using PyJWT library
-        import base64
         payload = _jwt_token.split('.')[1]
         # Add padding if needed
         payload += '=' * (4 - len(payload) % 4)
@@ -212,7 +212,7 @@ def create_resume_json_from_pdf(pdf_path: str) -> dict:
 
     payload = {
         "resume_content": pdf_text,
-        'model_name': 'gemini-2.5-flash'
+        'model_name': os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
     }
     
     headers = _get_auth_headers()
@@ -267,13 +267,17 @@ def get_resume_json() -> dict:
             with open('./resume_data.json', 'r') as f:
                 resume_data = json.load(f)
 
-        # Add additional details to resume JSON
-        try:
-            with open('./additional_details.txt', 'r') as f:
-                additional_details = f.read()
-            resume_data['additional_details'] = additional_details
-        except FileNotFoundError:
-            raise RuntimeError("additional_details.txt not found")
+        # Add additional details to resume JSON if file exists
+        additional_details_path = './additional_details.txt'
+        if os.path.exists(additional_details_path):
+            try:
+                with open(additional_details_path, 'r') as f:
+                    additional_details = f.read()
+                resume_data['additional_details'] = additional_details
+            except Exception as e:
+                print(f"Warning: Could not read additional_details.txt: {e}")
+        else:
+            print("Notice: additional_details.txt not found. Skipping additional context.")
 
         return resume_data
 
@@ -311,11 +315,14 @@ def get_job_analysis(resume_json, job_details: dict) -> str:
             'company_overview': job_details.get('company_overview')
         }
 
+        # Load settings
+        model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+
         payload = {
             "job_posting_text": job_details.get('job_description', ''),
             "job_specific_context": json.dumps(job_specific_context),
             "resume_json_data": json.dumps(resume_json),
-            "model_name": "gemini-2.5-flash"
+            "model_name": model_name
         }
 
         data = _make_api_request_with_fallback(
@@ -365,12 +372,18 @@ def get_tailored_resume(
     company = job_details.get('company_name', 'Company').replace(' ', '_')
     filename = f"{user_name}_resume_{company}.pdf"
 
+    # Load settings
+    filters = _get_job_filters()
+    general_settings = filters.get('general_settings', {})
+    theme = general_settings.get('resume_theme', 'engineeringclassic')
+    model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+
     payload = {
         "job_posting_text": job_details.get('job_description', ''),
         "resume_json_data": json.dumps(resume_json),
         "filename": filename,
-        "theme": "engineeringclassic",
-        "model_name": "gemini-2.5-flash",
+        "theme": theme,
+        "model_name": model_name,
         **({"current_resume_data": current_resume_data} if current_resume_data else {}),
         **({"retry_feedback": retry_feedback} if retry_feedback else {})
     }
@@ -433,13 +446,16 @@ def get_tailored_cl(resume_json, job_details: dict, current_content: str = None,
         'job_url': job_details.get('job_url', '')
     }
 
+    # Load settings
+    model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+
     payload = {
         "job_posting_text": job_details.get('job_description', ''),
         "job_specific_context": json.dumps(job_specific_context),
         "current_content": current_content,
         "retry_feedback": retry_feedback,
         "resume_json_data": json.dumps(resume_json),
-        "model_name": "gemini-2.5-flash"
+        "model_name": model_name
     }
 
     data = _make_api_request_with_fallback(
@@ -485,20 +501,18 @@ def load_search_urls(file_path: str = 'search_urls.txt') -> list[str]:
 SEARCH_URLS = load_search_urls()
 
 
-def bulk_filter_jobs(job_titles: list[str], resume_json: dict, max_retries: int = 3) -> list[str]:
+def bulk_filter_jobs(job_titles: list[dict], resume_json: dict, max_retries: int = 3) -> dict:
     """
     Evaluate job titles against the resume and filter out poor fits.
+    Also identifies generalizable skip keywords for future use.
 
     Args:
-        job_titles: List of job titles to evaluate
+        job_titles: List of dicts with 'title' and 'company'
         resume_json: Resume data
         max_retries: Maximum retry attempts with exponential backoff
 
     Returns:
-        List of job titles that should be filtered out (Very poor fit)
-
-    Raises:
-        Exception: If all retries fail
+        Dict containing 'filtered_titles' (list) and 'new_filters' (dict)
     """
     import google.genai as genai
 
@@ -510,18 +524,31 @@ def bulk_filter_jobs(job_titles: list[str], resume_json: dict, max_retries: int 
 Resume JSON:
 {json.dumps(resume_json, indent=2)}
 
-Here are {len(job_titles)} job titles. Return ONLY the job titles that are clearly NOT a good fit based on:
-1. Wrong technology stack (e.g., Java, React, .NET when candidate has Python/Django focus)
-2. Wrong role type (e.g., Manager, Sales, Frontend when candidate wants Backend)
-3. Wrong domain (e.g., Mobile, WordPress, Web Design)
+Here are {len(job_titles)} job opportunities. 
 
-Job Titles:
-{chr(10).join(f"{i + 1}. {title}" for i, title in enumerate(job_titles))}
+CONTEXT:
+We are building an iterative keyword-based filtering system to save costs on future searches. 
+1. Identify specific job titles that are clearly NOT a good fit.
+2. Identify generalizable "skip keywords" (substrings) for titles and company names that should ALWAYS be filtered out in the future.
+
+CRITERIA FOR FILTERING:
+1. Wrong technology stack or role requirements compared to the resume
+2. Wrong role type (e.g., mismatch between desired level or functional area)
+3. Wrong domain or industry that is clearly incompatible with the candidate's goals
+
+JOB DATA (JSON):
+{json.dumps(job_titles, indent=2)}
 
 Respond with ONLY a JSON object in this exact format:
-{{"filtered_titles": ["exact job title 1", "exact job title 2"]}}
+{{
+  "filtered_titles": ["exact job title 1", "exact job title 2"],
+  "new_filters": {{
+    "job_title_skip_keywords": ["keyword1", "keyword2"],
+    "company_skip_keywords": ["unwanted company 1"]
+  }}
+}}
 
-If ALL jobs are good fits, return: {{"filtered_titles": []}}
+If ALL jobs are good fits, return: {{"filtered_titles": [], "new_filters": {{"job_title_skip_keywords": [], "company_skip_keywords": []}}}}
 """
 
     # Try with primary key, then backup key
@@ -538,6 +565,9 @@ If ALL jobs are good fits, return: {{"filtered_titles": []}}
             else:
                 raise Exception("Both Gemini API keys not found")
 
+        # Load settings
+        model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+
         # Exponential backoff retry logic for current key
         for attempt in range(max_retries):
             try:
@@ -548,8 +578,11 @@ If ALL jobs are good fits, return: {{"filtered_titles": []}}
                 from utils import rate_limit
                 rate_limit()
 
+                # Calculate tokens (rough estimation)
+                # print(f"  Prompt tokens: {len(prompt) / 4}") 
+
                 response = client.models.generate_content(
-                    model='gemini-2.0-flash-exp',
+                    model=model_name,
                     contents=prompt
                 )
 
@@ -560,9 +593,13 @@ If ALL jobs are good fits, return: {{"filtered_titles": []}}
                 result = json.loads(cleaned)
 
                 filtered = result.get('filtered_titles', [])
+                new_filters = result.get('new_filters', {})
 
                 print(f"  Bulk filter ({key_name} key): {len(filtered)}/{len(job_titles)} jobs marked for filtering")
-                return filtered
+                if any(new_filters.values()):
+                    print(f"  Discovered {sum(len(v) for v in new_filters.values())} new filter keywords")
+
+                return result
 
             except Exception as e:
                 error_str = str(e)

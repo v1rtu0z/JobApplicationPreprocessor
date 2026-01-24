@@ -8,3 +8,4 @@
 /local_data/jobs.csv
 .gitignore
 search_urls.txt
+filters.yaml
