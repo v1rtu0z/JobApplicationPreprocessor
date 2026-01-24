@@ -129,9 +129,12 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
 
             # Handle rate limiting - move to next key
             if response.status_code == 429:
-                print(f"Rate limit hit on {key_name} key")
+                print("\n" + "!" * 40)
+                print(f"RATE LIMIT: {key_name} key hit rate limit (429).")
+                print("!" * 40 + "\n")
                 if not use_primary:  # This was the backup key (last attempt)
-                    print("Both API keys rate limited. Skipping this operation.")
+                    print("CRITICAL: Both Gemini API keys are currently rate limited or out of tokens.")
+                    print("Skipping this operation. The app will continue but some steps may be skipped.")
                     return None
                 continue  # Try backup key
 

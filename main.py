@@ -810,12 +810,18 @@ def analyze_single_job(sheet, row, idx, resume_json) -> str | None:
 
         # Immediately process Very good fit jobs
         if fit_score == 'Very good fit':
-            print(f"Very good fit detected! Immediately processing resume and cover letter...")
+            print("\n" + "*" * 60)
+            print(f"🌟 GREAT FIT DETECTED! 🌟")
+            print(f"Job: {row.get('Job Title')} @ {row.get('Company Name')}")
+            print(f"Immediately processing resume and cover letter...")
+            print("*" * 60 + "\n")
             try:
                 process_cover_letter(sheet, row, idx, resume_json)
                 process_resume(sheet, row, idx, resume_json)
             except Exception as e:
                 print(f"Error immediately processing Very good fit job: {e}")
+        elif fit_score in ['Good fit', 'Moderate fit']:
+            print(f"Found a {fit_score}: {row.get('Job Title')} @ {row.get('Company Name')}")
 
         print(f"Added analysis for: {row.get('Job Title')} @ {row.get('Company Name')}")
         return fit_score
@@ -1212,7 +1218,11 @@ def main():
     
     # Initialize storage based on USE_LOCAL_STORAGE flag
     if USE_LOCAL_STORAGE:
-        print("Using local storage mode (CSV files)")
+        print("\n" + "!" * 60)
+        print("IMPORTANT: Using local storage mode (CSV files).")
+        print("DO NOT open the CSV files in Excel or other editors while the app is running,")
+        print("as this will lock the files and cause the application to crash.")
+        print("!" * 60 + "\n")
         from local_storage import ensure_local_directories
         ensure_local_directories()  # Ensure directories exist
         client = None  # Not needed for local storage
@@ -1329,6 +1339,12 @@ def main():
             # Final check for any leftover jobs that didn't reach batch size of 100
             print("\nFinalizing processing cycle (processing leftover batches)...")
             bulk_filter_collected_jobs(sheet, resume_json, force_process=True)
+            
+            # Print a summary of what happened in this cycle
+            print(f"\nCycle summary:")
+            print(f" - New jobs collected: {len(collected_indices)}")
+            if len(collected_indices) > 0:
+                print(f" - Analyzed and filtered new jobs.")
             
             if shutdown_requested:
                 break

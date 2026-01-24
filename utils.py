@@ -302,7 +302,11 @@ def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, 
         error_msg = str(e)
         print(f"Error in bulk Apify fetch: {error_msg}")
         if "Monthly usage hard limit exceeded" in error_msg:
-            print("CRITICAL: Apify monthly usage hard limit reached. Disabling Apify for this run.")
+            print("\n" + "!" * 60)
+            print("CRITICAL: APIFY MONTHLY USAGE HARD LIMIT REACHED.")
+            print("No more jobs can be fetched via Apify this month.")
+            print("Disabling Apify for the remainder of this run.")
+            print("!" * 60 + "\n")
             APIFY_AVAILABLE = False
         return {}
 
@@ -1009,6 +1013,10 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
         error_msg = str(e)
         print(f"Error running Apify Actor: {error_msg}")
         if "Monthly usage hard limit exceeded" in error_msg:
-            print("CRITICAL: Apify monthly usage hard limit reached. Disabling Apify for this run.")
+            print("\n" + "!" * 60)
+            print("CRITICAL: APIFY MONTHLY USAGE HARD LIMIT REACHED.")
+            print("No more jobs can be fetched via Apify this month.")
+            print("Disabling Apify for the remainder of this run.")
+            print("!" * 60 + "\n")
             APIFY_AVAILABLE = False
         return []
