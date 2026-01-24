@@ -12,24 +12,22 @@
 
 # Exact substrings found anywhere in the job title (case-insensitive)
 job_title_skip_keywords:
-  - azure
-  - java
-  - react
-  - frontend
+  - example_unwanted_skill_1
+  - example_unwanted_skill_2
   - manager
 
 # Whole words found in the job title (useful for short acronyms like SAP)
 job_title_skip_keywords_2:
-  - sap
+  - example_unwanted_skill_3
 
 # Keywords found in the company name (case-insensitive)
 company_skip_keywords:
-  - deel
+  - example_unwanted_company
 
 # Keywords found in the location string (case-insensitive)
 location_skip_keywords:
-  - czechia
-  - poland
+  - example_location_1
+  - example_location_2
 
 # -----------------------------------------------------------------------------
 # Location Priorities (Positive Filters)
@@ -38,11 +36,9 @@ location_skip_keywords:
 # Jobs matching these locations will be sorted to the top of the list.
 # This section is optional. If empty or missing, all locations have equal priority.
 location_priorities:
-  italy: 1
-  italia: 1
-  european union: 2
-  serbia: 3
   remote: 1
+  your_city: 1
+  your_country: 2
 
 # -----------------------------------------------------------------------------
 # Sustainability Criteria (Optional)

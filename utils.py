@@ -84,6 +84,7 @@ def parse_job_url(driver, linkedin_url: str) -> dict:
                                                                                                      '').strip()
         return {
             'company_name': job_dict.get('company', ''),
+            
             'job_title': job_dict.get('job_title', ''),
             'job_description': job_description,
             'job_url': linkedin_url,
@@ -425,10 +426,6 @@ Return is_sustainable: true *ONLY* for companies in sustainable industries like:
 
 Return is_sustainable: false for:
 {negative_list}
-- Gambling, casinos, betting
-- Predatory lending, payday loans
-- Harmful addictions or exploitative industries
-- Providing services to any companies/industries above
 
 Return is_sustainable: false for neutral industries (banking, tech, finance, insurance, investment) UNLESS they have an explicit and primary sustainability/ESG/impact focus.
 
@@ -872,9 +869,9 @@ def get_sustainability_from_sheet(company_name: str, sheet) -> str | None:
     return None
 
 
-def fetch_jobs_via_apify(search_url: str) -> list[dict]:
+def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[dict]:
     """
-    Fetch jobs from LinkedIn via Apify Actor using parameters extracted from search_url.
+    Fetch jobs from LinkedIn via Apify Actor using parameters extracted from search_url OR provided directly.
     """
     global APIFY_AVAILABLE
     if not APIFY_AVAILABLE:
@@ -883,79 +880,94 @@ def fetch_jobs_via_apify(search_url: str) -> list[dict]:
 
     from main import APIFY_API_TOKEN
     
-    parsed_url = urlparse(search_url)
-    query_params = parse_qs(parsed_url.query)
-    
-    # Extract keywords
-    keywords = query_params.get('keywords', [''])[0]
-    
-    # Extract geoId (location)
-    location = query_params.get('geoId', [''])[0]
-    
-    # Extract workplace type (f_WT)
-    # LinkedIn f_WT values: 1=On-site, 2=Remote, 3=Hybrid
-    # Actor remote values: onsite, remote, hybrid
-    remote_map = {'1': 'onsite', '2': 'remote', '3': 'hybrid'}
-    f_wt = query_params.get('f_WT', [])
-    # Handle both multiple f_WT parameters and comma-separated values in one parameter
-    if f_wt:
-        first_wt = f_wt[0].split(',')[0]
-        remote = remote_map.get(first_wt, "")
+    if params:
+        run_input = {
+            "keywords": params.get('keywords', ''),
+            "location": params.get('location', ''),
+            "remote": params.get('remote', ''),
+            "experienceLevel": params.get('experienceLevel', ''),
+            "sort": params.get('sort', 'recent'),
+            "date_posted": params.get('date_posted', 'week'),
+            "easy_apply": params.get('easy_apply', ''),
+            "limit": params.get('limit', 100)
+        }
+    elif search_url:
+        parsed_url = urlparse(search_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        # Extract keywords
+        keywords = query_params.get('keywords', [''])[0]
+        
+        # Extract geoId (location)
+        location = query_params.get('geoId', [''])[0]
+        
+        # Extract workplace type (f_WT)
+        # LinkedIn f_WT values: 1=On-site, 2=Remote, 3=Hybrid
+        # Actor remote values: onsite, remote, hybrid
+        remote_map = {'1': 'onsite', '2': 'remote', '3': 'hybrid'}
+        f_wt = query_params.get('f_WT', [])
+        # Handle both multiple f_WT parameters and comma-separated values in one parameter
+        if f_wt:
+            first_wt = f_wt[0].split(',')[0]
+            remote = remote_map.get(first_wt, "")
+        else:
+            remote = ""
+
+        # Extract experience level (f_E)
+        # LinkedIn f_E values: 1=Internship, 2=Entry level, 3=Associate, 4=Mid-Senior level, 5=Director, 6=Executive
+        # Actor experienceLevel values: internship, entry, associate, mid_senior, director, executive
+        exp_map = {
+            '1': 'internship',
+            '2': 'entry',
+            '3': 'associate',
+            '4': 'mid_senior',
+            '5': 'director',
+            '6': 'executive'
+        }
+        f_e = query_params.get('f_E', [])
+        # Handle both multiple f_E parameters and comma-separated values in one parameter
+        if f_e:
+            first_e = f_e[0].split(',')[0]
+            experience_level = exp_map.get(first_e, "")
+        else:
+            experience_level = ""
+
+        # Extract sort order (sortBy)
+        # LinkedIn sortBy values: R=Relevant, DD=Most recent
+        # Actor sort values: relevant, recent
+        sort_map = {'R': 'relevant', 'DD': 'recent'}
+        sort_val = query_params.get('sortBy', [''])[0]
+        sort = sort_map.get(sort_val, "")
+
+        # Extract date posted (f_TPR)
+        # LinkedIn f_TPR values: r604800 (week), r2592000 (month), r86400 (day)
+        # Actor date_posted values: month, week, day
+        date_posted_map = {
+            'r2592000': 'month',
+            'r604800': 'week',
+            'r86400': 'day'
+        }
+        f_tpr = query_params.get('f_TPR', [''])[0]
+        date_posted = date_posted_map.get(f_tpr, "")
+
+        # Extract Easy Apply (f_AL)
+        easy_apply = "true" if 'f_AL' in query_params else ""
+
+        run_input = {
+            "keywords": keywords,
+            "location": location,
+            "remote": remote,
+            "experienceLevel": experience_level,
+            "sort": sort,
+            "date_posted": date_posted,
+            "easy_apply": easy_apply,
+            "limit": 100
+        }
     else:
-        remote = ""
-
-    # Extract experience level (f_E)
-    # LinkedIn f_E values: 1=Internship, 2=Entry level, 3=Associate, 4=Mid-Senior level, 5=Director, 6=Executive
-    # Actor experienceLevel values: internship, entry, associate, mid_senior, director, executive
-    exp_map = {
-        '1': 'internship',
-        '2': 'entry',
-        '3': 'associate',
-        '4': 'mid_senior',
-        '5': 'director',
-        '6': 'executive'
-    }
-    f_e = query_params.get('f_E', [])
-    # Handle both multiple f_E parameters and comma-separated values in one parameter
-    if f_e:
-        first_e = f_e[0].split(',')[0]
-        experience_level = exp_map.get(first_e, "")
-    else:
-        experience_level = ""
-
-    # Extract sort order (sortBy)
-    # LinkedIn sortBy values: R=Relevant, DD=Most recent
-    # Actor sort values: relevant, recent
-    sort_map = {'R': 'relevant', 'DD': 'recent'}
-    sort_val = query_params.get('sortBy', [''])[0]
-    sort = sort_map.get(sort_val, "")
-
-    # Extract date posted (f_TPR)
-    # LinkedIn f_TPR values: r604800 (week), r2592000 (month), r86400 (day)
-    # Actor date_posted values: month, week, day
-    date_posted_map = {
-        'r2592000': 'month',
-        'r604800': 'week',
-        'r86400': 'day'
-    }
-    f_tpr = query_params.get('f_TPR', [''])[0]
-    date_posted = date_posted_map.get(f_tpr, "")
-
-    # Extract Easy Apply (f_AL)
-    easy_apply = "true" if 'f_AL' in query_params else ""
-
-    run_input = {
-        "keywords": keywords,
-        "location": location,
-        "remote": remote,
-        "experienceLevel": experience_level,
-        "sort": sort,
-        "date_posted": date_posted,
-        "easy_apply": easy_apply,
-        "limit": 100
-    }
+        print("Error: Either search_url or params must be provided to fetch_jobs_via_apify")
+        return []
     
-    print(f"Running Apify Actor for keywords: '{keywords}' in location: '{location}'")
+    print(f"Running Apify Actor for keywords: '{run_input.get('keywords')}' in location: '{run_input.get('location')}'")
     
     client = ApifyClient(APIFY_API_TOKEN)
     

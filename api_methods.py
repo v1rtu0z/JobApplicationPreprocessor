@@ -159,6 +159,8 @@ def create_resume_json_from_pdf(pdf_path: str) -> dict:
     Call the /get-resume-json endpoint to convert a PDF resume to JSON.
     """
     if not os.path.exists(pdf_path):
+        print(f"CRITICAL ERROR: Resume PDF not found at: {pdf_path}")
+        print("Please check RESUME_PDF_PATH in your .env file.")
         raise FileNotFoundError(f"Resume PDF not found at: {pdf_path}")
 
     print(f"Converting resume PDF to JSON: {pdf_path}")
@@ -270,14 +272,11 @@ def get_resume_json() -> dict:
         # Add additional details to resume JSON if file exists
         additional_details_path = './additional_details.txt'
         if os.path.exists(additional_details_path):
-            try:
-                with open(additional_details_path, 'r') as f:
-                    additional_details = f.read()
-                resume_data['additional_details'] = additional_details
-            except Exception as e:
-                print(f"Warning: Could not read additional_details.txt: {e}")
+            with open(additional_details_path, 'r') as f:
+                additional_details = f.read()
+            resume_data['additional_details'] = additional_details
         else:
-            print("Notice: additional_details.txt not found. Skipping additional context.")
+            print(f"Notice: {additional_details_path} not found. Personalized analysis might be limited.")
 
         return resume_data
 
@@ -480,6 +479,76 @@ def fit_score_to_enum(fit_score: str) -> int:
         "Very Poor Fit": 0
     }
     return score_map.get(fit_score, 0)
+
+
+def get_search_parameters(resume_json: dict) -> list[dict]:
+    """
+    Generate search parameters for LinkedIn jobs based on resume and additional details.
+    """
+    try:
+        # Load additional details if they exist
+        additional_details = ""
+        additional_details_path = 'additional_details.txt'
+        if os.path.exists(additional_details_path):
+            with open(additional_details_path, 'r') as f:
+                additional_details = f.read()
+        else:
+            print(f"Warning: {additional_details_path} not found. LLM results may be less personalized.")
+
+        model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+        
+        # We need a prompt that asks for multiple search queries to cover different aspects
+        prompt = f"""
+        Based on the following resume and additional details, generate a list of search parameters for LinkedIn job searches.
+        The goal is to find jobs that are a good fit for the user's background and preferences.
+        
+        Resume:
+        {json.dumps(resume_json)}
+        
+        Additional Details:
+        {additional_details}
+        
+        Return a JSON list of objects. Each object should have:
+        - keywords: string (e.g., "Software Engineer", "Project Manager")
+        - location: string (e.g., "Remote", "London", "United States")
+        - remote: string (one of: "onsite", "remote", "hybrid")
+        - experienceLevel: string (one of: "internship", "entry", "associate", "mid_senior", "director", "executive")
+        - date_posted: string (one of: "month", "week", "day") - default to "week"
+        
+        Provide 3-5 diverse search queries that cover different job titles the user is interested in and their location preferences as indicated in their profile.
+        """
+
+        payload = {
+            "prompt": prompt,
+            "model_name": model_name,
+            "response_mime_type": "application/json"
+        }
+
+        # Use the generic text generation endpoint
+        data = _make_api_request_with_fallback(
+            f"{SERVER_URL}/generate-search-parameters",
+            payload
+        )
+
+        if data and 'search_parameters' in data:
+            return data['search_parameters']
+        elif data and 'text' in data:
+            # Maybe the server just returns raw text that needs parsing
+            try:
+                import re
+                json_match = re.search(r'\[.*\]', data['text'], re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group(0))
+            except:
+                pass
+        
+        # Fallback if endpoint doesn't exist yet or fails
+        print("Warning: /generate-search-parameters failed or returned unexpected data. No search parameters generated.")
+        return []
+
+    except Exception as e:
+        print(f"Error generating search parameters: {e}")
+        return []
 
 
 def load_search_urls(file_path: str = 'search_urls.txt') -> list[str]:
