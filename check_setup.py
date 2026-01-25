@@ -12,12 +12,12 @@ def check_setup():
     dependencies = [
         ('apify_client', 'apify-client'),
         ('google.genai', 'google-genai'),
-        ('gspread', 'gspread'),
         ('html2text', 'html2text'),
         ('linkedin_scraper', 'linkedin-scraper'),
         ('selenium', 'selenium'),
         ('dotenv', 'python-dotenv'),
-        ('googleapiclient', 'google-api-python-client'),
+        ('streamlit', 'streamlit'),
+        ('pandas', 'pandas'),
     ]
     
     print("\n📦 Checking Dependencies:")
@@ -47,22 +47,18 @@ def check_setup():
     else:
         print("  ❌ .env file NOT FOUND")
 
-    # 4. Check Google Credentials
-    # ... (skipping credentials check for brevity in search_replace if needed, but I'll include it)
-    print("\n🔑 Checking Google Credentials:")
-    use_local = os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true"
-    if use_local:
-        print("  ✅ USE_LOCAL_STORAGE is enabled (Google credentials optional)")
-    elif os.path.exists('service_account.json'):
-        print("  ✅ service_account.json found (Method A)")
-    elif os.path.exists('credentials.json'):
-        print("  ✅ credentials.json found (Method B)")
-        if os.path.exists('token.json'):
-            print("  ✅ token.json found (Authorized)")
+    # 4. Check Local Storage Directory
+    print("\n💾 Checking Local Storage:")
+    local_data_path = os.path.join('.', 'local_data')
+    if os.path.exists(local_data_path):
+        print("  ✅ local_data directory exists")
+        db_path = os.path.join(local_data_path, 'jobs.db')
+        if os.path.exists(db_path):
+            print("  ✅ jobs.db database found")
         else:
-            print("  ℹ️ token.json not found (Will require browser authorization on first run)")
+            print("  ℹ️ jobs.db not found (will be created on first run)")
     else:
-        print("  ❌ No Google credentials found. Need either 'service_account.json' or 'credentials.json'")
+        print("  ℹ️ local_data directory not found (will be created on first run)")
 
     # 5. Check Personalization files
     print("\n👤 Checking Personalization Files:")

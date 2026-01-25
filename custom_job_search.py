@@ -3,6 +3,7 @@ from typing import List
 from time import sleep
 
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
 
 class CustomJobSearch(JobSearch):
@@ -48,20 +49,20 @@ class CustomJobSearch(JobSearch):
         try:
             focused_list_element = self.wait_for_element_to_load(name="job-card-list")
             job_listing = focused_list_element.find_element(By.XPATH, "./ancestor::ul[1]")
-        except:
+        except (NoSuchElementException, TimeoutException, AttributeError) as e:
             try:
                 # Try to find the jobs list container directly
                 job_listing = self.wait_for_element_to_load(name="scaffold-layout__list-container")
-            except:
+            except (NoSuchElementException, TimeoutException, AttributeError) as e:
                 try:
                     # Alternative: find by the list itself
                     job_listing = self.driver.find_element(By.CLASS_NAME, "jobs-search-results-list")
-                except:
+                except (NoSuchElementException, TimeoutException) as e:
                     try:
                         # Another alternative: find the scrollable container
                         job_listing = self.driver.find_element(By.CSS_SELECTOR, "ul.scaffold-layout__list-container")
-                    except:
-                        print(f"Could not find job listing container at {url}")
+                    except (NoSuchElementException, TimeoutException) as e:
+                        print(f"Could not find job listing container at {url}: {e}")
                         return []
 
         if not job_listing:

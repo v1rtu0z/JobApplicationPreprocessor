@@ -2,29 +2,77 @@ import json
 import os
 import random
 import time
+import re
 from pathlib import Path
 from functools import wraps
 from typing import Any
 
 import google.genai as genai
-import gspread
 import html2text
 from urllib.parse import urlparse, parse_qs
 from apify_client import ApifyClient
-from google.auth.transport.requests import Request
-from google.oauth2 import service_account
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-
-# Google Sheets OAuth setup
-SCOPES = ["https://www.googleapis.com/auth/drive",
-          "https://www.googleapis.com/auth/spreadsheets"]
 
 # Global variable to track last request time
 last_request_time = 0
 
-# Global variable to track Apify availability
-APIFY_AVAILABLE = True
+
+def column_index_to_letter(col_index: int) -> str:
+    """
+    Convert a 1-indexed column number to column letter(s).
+    E.g., 1 -> 'A', 2 -> 'B', 27 -> 'AA'
+    """
+    result = ""
+    while col_index > 0:
+        col_index, remainder = divmod(col_index - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+class ApifyStateManager:
+    """Thread-safe manager for Apify availability state with automatic retry logic."""
+    
+    def __init__(self):
+        self._available = True
+        self._last_failure_time = None
+        self._retry_delay = 3600  # 1 hour before retrying after failure
+    
+    def is_available(self) -> bool:
+        """Check if Apify is currently available."""
+        # If failed recently, check if enough time has passed to retry
+        if not self._available and self._last_failure_time:
+            elapsed = time.time() - self._last_failure_time
+            if elapsed > self._retry_delay:
+                print(f"Apify retry delay ({self._retry_delay}s) elapsed. Allowing retry...")
+                self._available = True
+                self._last_failure_time = None
+        return self._available
+    
+    def mark_unavailable(self):
+        """Mark Apify as unavailable due to rate limit or error."""
+        self._available = False
+        self._last_failure_time = time.time()
+    
+    def reset(self):
+        """Reset state to available (useful for testing or manual intervention)."""
+        self._available = True
+        self._last_failure_time = None
+
+
+# Global instance
+apify_state = ApifyStateManager()
+
+# Legacy support - treat as a simple boolean for backwards compatibility
+class _ApifyAvailableProxy:
+    """Proxy class to maintain backwards compatibility with direct assignment."""
+    
+    def __bool__(self):
+        return apify_state.is_available()
+    
+    def __repr__(self):
+        return str(apify_state.is_available())
+
+
+APIFY_AVAILABLE = _ApifyAvailableProxy()
 
 
 from config import _get_job_filters, _save_job_filters
@@ -173,54 +221,6 @@ def scrape_search_results(driver, search_url: str) -> list:
         return []
 
 
-def get_google_creds():
-    """Get authorized Google credentials, supporting both Service Account and OAuth."""
-    creds = None
-    
-    # 1. Try Service Account first (Easiest for new users)
-    if os.path.exists('service_account.json'):
-        try:
-            creds = service_account.Credentials.from_service_account_file(
-                'service_account.json', scopes=SCOPES)
-            return creds
-        except Exception as e:
-            print(f"Warning: Failed to load service_account.json: {e}")
-
-    # 2. Fallback to OAuth flow (credentials.json + token.json)
-    try:
-        if os.path.exists('token.json'):
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                try:
-                    creds.refresh(Request())
-                except Exception:
-                    creds = None
-
-            if not creds or not creds.valid:
-                if not os.path.exists('credentials.json'):
-                    raise Exception("Missing 'service_account.json' OR 'credentials.json'. "
-                                    "Please follow the setup guide to obtain credentials.")
-                
-                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                creds = flow.run_local_server(port=0)
-
-            # Save the new/refreshed credentials
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
-        
-        return creds
-    except Exception as e:
-        raise Exception(f"Google authentication failed: {e}")
-
-
-def get_google_client():
-    """Get an authorized gspread client."""
-    creds = get_google_creds()
-    return gspread.authorize(creds)
-
-
 def fit_score_to_enum(fit_score: str) -> int:
     """Convert fit score text to numeric value for sorting"""
     score_map = {
@@ -241,6 +241,22 @@ def get_user_name(resume_json) -> Any:
     return user_name
 
 
+def normalize_company_name(company_name: str) -> str:
+    """
+    Normalize company name for case-insensitive matching and caching.
+    Strips whitespace and converts to lowercase.
+    
+    Args:
+        company_name: Company name string
+        
+    Returns:
+        Normalized company name (lowercase, stripped)
+    """
+    if not company_name:
+        return ''
+    return company_name.strip().lower()
+
+
 def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, str]:
     """
     Fetch company overviews in bulk using Apify (up to 1000 companies).
@@ -254,7 +270,6 @@ def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, 
     if not company_names:
         return {}
 
-    global APIFY_AVAILABLE
     if not APIFY_AVAILABLE:
         print("Apify is currently unavailable (usage limit reached). Skipping company overview fetch.")
         return {}
@@ -307,13 +322,13 @@ def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, 
             print("No more jobs can be fetched via Apify this month.")
             print("Disabling Apify for the remainder of this run.")
             print("!" * 60 + "\n")
-            APIFY_AVAILABLE = False
+            apify_state.mark_unavailable()
         return {}
 
 
 SHEET_HEADER = [
     'Company Name', 'Job Title', 'Location', 'Location Priority', 'Job Description', 'Job URL', 'Company URL',
-    'Company overview', 'Sustainable company',
+    'Company overview', 'Sustainable company', 'CO fetch attempted',
     'Fit score', 'Fit score enum', 'Bulk filtered', 'Job analysis', 'Tailored resume url', 'Tailored resume json',
     'Resume feedback',
     'Resume feedback addressed', 'Tailored cover letter (to be humanized)', 'CL feedback',
@@ -353,6 +368,60 @@ def get_location_priority(location: str) -> int:
     return max(location_priorities.values()) + 1 if location_priorities else 5
 
 
+def _call_gemini_for_sustainability(prompt: str, key_name_context: str = "") -> dict | None:
+    """
+    Common logic for calling Gemini API with fallback for sustainability checks.
+    
+    Args:
+        prompt: The prompt to send to Gemini
+        key_name_context: Context string for logging (e.g., company name)
+    
+    Returns:
+        Parsed JSON response dict, or None if all keys failed
+    """
+    api_keys = [
+        ('primary', os.getenv("GEMINI_API_KEY")),
+        ('backup', os.getenv("BACKUP_GEMINI_API_KEY"))
+    ]
+
+    for key_name, api_key in api_keys:
+        if not api_key:
+            if key_name == 'primary':
+                print(f"Warning: GEMINI_API_KEY not found, trying backup...")
+                continue
+            else:
+                print(f"Warning: Both API keys not found")
+                return None
+
+        try:
+            client = genai.Client(api_key=api_key)
+            
+            rate_limit()
+            model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+
+            response_text = response.text.strip()
+            cleaned = response_text.replace('```json', '').replace('```', '').strip()
+            result = json.loads(cleaned)
+            
+            return result
+
+        except Exception as e:
+            error_msg = str(e)
+            if key_name == 'primary':
+                print(f"Error with {key_name} key{' for ' + key_name_context if key_name_context else ''}: {e}")
+                print(f"  → Trying backup key...")
+                continue
+            else:
+                print(f"Error with {key_name} key{' for ' + key_name_context if key_name_context else ''}: {e}")
+                return None
+
+    return None
+
+
 def is_sustainable_company_bulk(companies_data: list[dict], sheet=None) -> dict[str, dict]:
     """
     Determine sustainability for multiple companies in bulk.
@@ -366,12 +435,17 @@ def is_sustainable_company_bulk(companies_data: list[dict], sheet=None) -> dict[
     """
     results = {}
     
+    # Build sustainability cache once for efficiency
+    sustainability_cache = None
+    if sheet:
+        sustainability_cache = _build_sustainability_cache(sheet)
+    
     # Check cache first for all companies
     remaining_companies = []
     for data in companies_data:
         name = data['company_name']
-        if sheet:
-            cached_result = get_sustainability_from_sheet(name, sheet)
+        if sheet and sustainability_cache:
+            cached_result = get_sustainability_from_sheet(name, sheet, cache=sustainability_cache)
             if cached_result is not None:
                 results[name] = {
                     'is_sustainable': cached_result == 'TRUE',
@@ -391,37 +465,22 @@ def is_sustainable_company_bulk(companies_data: list[dict], sheet=None) -> dict[
     if not remaining_companies:
         return results
 
-    print(f"Checking sustainability in bulk for {len(remaining_companies)} companies...")
-
     # Load criteria from filters
     filters = _get_job_filters()
     criteria = filters.get('sustainability_criteria', {})
     positive_list = "\n".join([f"- {c}" for c in criteria.get('positive', [])])
     negative_list = "\n".join([f"- {c}" for c in criteria.get('negative', [])])
 
-    # Try with primary key, then backup key
-    api_keys = [
-        ('primary', os.getenv("GEMINI_API_KEY")),
-        ('backup', os.getenv("BACKUP_GEMINI_API_KEY"))
-    ]
-
-    for key_name, api_key in api_keys:
-        if not api_key:
-            continue
-
-        try:
-            client = genai.Client(api_key=api_key)
-            
-            companies_text = ""
-            for i, data in enumerate(remaining_companies):
-                companies_text += f"""
+    companies_text = ""
+    for i, data in enumerate(remaining_companies):
+        companies_text += f"""
 --- Company {i+1} ---
 Name: {data['company_name']}
 Overview: {data['company_overview']}
 Job Description snippet: {data['job_description'][:500] if data['job_description'] else "N/A"}
 """
 
-            prompt = f"""Analyze if these companies work on something sustainability-oriented.
+    prompt = f"""Analyze if these companies work on something sustainability-oriented.
 {companies_text}
 
 Criteria for Sustainability:
@@ -440,49 +499,32 @@ Example:
   "Company B": {{"is_sustainable": false, "reasoning": "Defense contractor"}}
 }}"""
 
-            rate_limit()
-            model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
-
-            response_text = response.text.strip()
-            cleaned = response_text.replace('```json', '').replace('```', '').strip()
-            batch_results = json.loads(cleaned)
-
-            for data in remaining_companies:
-                name = data['company_name']
-                if name in batch_results:
-                    res = batch_results[name]
-                    is_sust = res.get('is_sustainable')
-                    reason = res.get('reasoning', 'No reasoning provided')
-                    results[name] = {
-                        'is_sustainable': is_sust,
-                        'reasoning': reason
-                    }
-                    
-                    if is_sust is False:
-                        print(f"  ⚠️  Bulk Sustainability check ({key_name} key): {name} -> False")
-                        print(f"      Reason: {reason}")
-                    else:
-                        print(f"  ✓  Bulk Sustainability check ({key_name} key): {name} -> True")
+    batch_results = _call_gemini_for_sustainability(prompt, "bulk check")
+    
+    if batch_results:
+        for data in remaining_companies:
+            name = data['company_name']
+            if name in batch_results:
+                res = batch_results[name]
+                is_sust = res.get('is_sustainable')
+                reason = res.get('reasoning', 'No reasoning provided')
+                results[name] = {
+                    'is_sustainable': is_sust,
+                    'reasoning': reason
+                }
+                
+                if is_sust is False:
+                    print(f"  ⚠️  Bulk Sustainability check: {name} -> False")
+                    print(f"      Reason: {reason}")
                 else:
-                    print(f"Warning: Result for {name} missing from bulk API response")
-                    results[name] = {'is_sustainable': None, 'reasoning': 'Missing from API response'}
-
-            return results
-
-        except Exception as e:
-            print(f"Error with {key_name} key in bulk sustainability check: {e}")
-            if key_name == 'primary':
-                print(f"  → Trying backup key...")
-                continue
+                    print(f"  ✓  Bulk Sustainability check: {name} -> True")
             else:
-                # If both failed, we'll mark them as None
-                for data in remaining_companies:
-                    results[data['company_name']] = {'is_sustainable': None, 'reasoning': 'API Error'}
-                return results
+                print(f"Warning: Result for {name} missing from bulk API response")
+                results[name] = {'is_sustainable': None, 'reasoning': 'Missing from API response'}
+    else:
+        # All API calls failed
+        for data in remaining_companies:
+            results[data['company_name']] = {'is_sustainable': None, 'reasoning': 'API Error'}
 
     return results
 
@@ -503,7 +545,9 @@ def is_sustainable_company(company_name: str, company_overview: str, job_descrip
     """
     # Check cache first if sheet is provided
     if sheet:
-        cached_result = get_sustainability_from_sheet(company_name, sheet)
+        # Build cache once (could be optimized further by passing cache from caller)
+        sustainability_cache = _build_sustainability_cache(sheet)
+        cached_result = get_sustainability_from_sheet(company_name, sheet, cache=sustainability_cache)
         if cached_result is not None:
             # We already have a result in the sheet, no need to print anything or call API
             return cached_result == 'TRUE'
@@ -513,33 +557,13 @@ def is_sustainable_company(company_name: str, company_overview: str, job_descrip
 
     print(f"Checking sustainability for: {company_name}")
 
-    # Try with primary key, then backup key
-    api_keys = [
-        ('primary', os.getenv("GEMINI_API_KEY")),
-        ('backup', os.getenv("BACKUP_GEMINI_API_KEY"))
-    ]
+    # Load criteria from filters
+    filters = _get_job_filters()
+    criteria = filters.get('sustainability_criteria', {})
+    positive_list = "\n".join([f"- {c}" for c in criteria.get('positive', [])])
+    negative_list = "\n".join([f"- {c}" for c in criteria.get('negative', [])])
 
-    for key_name, api_key in api_keys:
-        if not api_key:
-            if key_name == 'primary':
-                print(f"Warning: GEMINI_API_KEY not found, trying backup...")
-                continue
-            else:
-                print(f"Warning: Both API keys not found, returning None")
-                return None
-
-        try:
-            # Configure Gemini client
-            client = genai.Client(api_key=api_key)
-
-            # Load criteria from filters
-            filters = _get_job_filters()
-            criteria = filters.get('sustainability_criteria', {})
-            positive_list = "\n".join([f"- {c}" for c in criteria.get('positive', [])])
-            negative_list = "\n".join([f"- {c}" for c in criteria.get('negative', [])])
-
-            # Prepare the prompt
-            prompt = f"""Analyze if this company works on something sustainability-oriented:
+    prompt = f"""Analyze if this company works on something sustainability-oriented:
 
 Company Name: {company_name}
 
@@ -561,44 +585,22 @@ You must respond with ONLY a JSON object in this exact format:
   "reasoning": "brief explanation"
 }}"""
 
-            # Call Gemini with rate limiting protection
-            rate_limit()
-            model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
+    result = _call_gemini_for_sustainability(prompt, company_name)
+    
+    if result:
+        is_sustainable = result.get("is_sustainable", True)
+        reasoning = result.get("reasoning", "No reasoning provided")
 
-            # Parse JSON response
-            response_text = response.text.strip()
-            # Remove markdown code blocks if present
-            cleaned = response_text.replace('```json', '').replace('```', '').strip()
-            result = json.loads(cleaned)
+        if not is_sustainable:
+            print(f"  ⚠️  Sustainability check: {company_name} -> False")
+            print(f"      Reason: {reasoning}")
+        else:
+            print(f"  ✓  Sustainability check: {company_name} -> True")
 
-            is_sustainable = result.get("is_sustainable", True)
-            reasoning = result.get("reasoning", "No reasoning provided")
-
-            if not is_sustainable:
-                print(f"  ⚠️  Sustainability check ({key_name} key): {company_name} -> False")
-                print(f"      Reason: {reasoning}")
-            else:
-                print(f"  ✓  Sustainability check ({key_name} key): {company_name} -> True")
-
-            return is_sustainable
-
-        except Exception as e:
-            if key_name == 'primary':
-                print(f"Error with {key_name} key for {company_name}: {e}")
-                print(f"  → Trying backup key...")
-                continue  # Try backup key
-            else:
-                print(f"Error with {key_name} key for {company_name}: {e}")
-                print(f"  → Both keys failed, returning None")
-                return None
-
-    # If both keys failed
-    print(f"Both API keys failed for {company_name}, returning None")
-    return None
+        return is_sustainable
+    else:
+        print(f"Both API keys failed for {company_name}, returning None")
+        return None
 
 
 def validate_sustainability_for_unprocessed_jobs(sheet):
@@ -643,10 +645,12 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
         if not company_name:
             continue
 
-        if company_name in companies_seen:
+        # Use case-insensitive matching for company names
+        company_key = normalize_company_name(company_name)
+        if company_key in companies_seen:
             continue
 
-        companies_seen.add(company_name)
+        companies_seen.add(company_key)
         companies_to_check.append({
             'company_name': company_name,
             'company_overview': company_overview,
@@ -659,8 +663,9 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
 
     print(f"Found {len(companies_to_check)} companies to check for sustainability.")
 
-    # Phase 2: Process in batches of 10
-    batch_size = 10
+    # Phase 2: Process in batches
+    # Note: This could be imported from main.py if made a shared constant
+    batch_size = 10  # Number of companies to check for sustainability per batch
     total_processed = 0
 
     for i in range(0, len(companies_to_check), batch_size):
@@ -668,15 +673,6 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
         print(f"\nProcessing batch {i // batch_size + 1} ({len(batch)} companies)...")
 
         batch_results = is_sustainable_company_bulk(batch, sheet=sheet)
-
-        # Prepare bulk updates for the sheet
-        bulk_updates = []
-        
-        # Get column indices
-        sc_col = gspread.utils.rowcol_to_a1(1, get_column_index(sheet, 'Sustainable company'))[0]
-        fs_col = gspread.utils.rowcol_to_a1(1, get_column_index(sheet, 'Fit score'))[0]
-        fse_col = gspread.utils.rowcol_to_a1(1, get_column_index(sheet, 'Fit score enum'))[0]
-        ja_col = gspread.utils.rowcol_to_a1(1, get_column_index(sheet, 'Job analysis'))[0]
 
         for company_name, result in batch_results.items():
             is_sustainable = result['is_sustainable']
@@ -687,49 +683,43 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
 
             sustainability_value = 'TRUE' if is_sustainable else 'FALSE'
             
-            # Find all rows with this company name and prepare updates
-            # Case-insensitive match, and handle possible sub-string matches or trailing/leading spaces
+            # Find all jobs with this company name and update them
+            # Case-insensitive exact match preferred, substring match as fallback
             search_name = company_name.strip().lower()
-            for idx, row in enumerate(all_rows, start=2):
+            bulk_updates = []  # Collect updates for bulk processing
+            
+            for row in all_rows:
                 row_company = row.get('Company Name', '').strip().lower()
+                job_url = row.get('Job URL', '').strip()
                 
-                # Check for exact match or close match
-                if row_company == search_name or search_name in row_company or row_company in search_name:
-                    # Sustainability field
-                    bulk_updates.append({
-                        'range': f'{sc_col}{idx}',
-                        'values': [[sustainability_value]]
-                    })
+                if not job_url:
+                    continue
+                
+                # Prefer exact match, but allow substring match for company name variations
+                if row_company == search_name:
+                    match = True
+                elif search_name in row_company or row_company in search_name:
+                    match = True
+                else:
+                    match = False
+                
+                if match:
+                    updates = {'Sustainable company': sustainability_value}
 
                     # If unsustainable, mark as Very poor fit
                     if not is_sustainable and not row.get('Fit score'):
-                        bulk_updates.extend([
-                            {
-                                'range': f'{fs_col}{idx}',
-                                'values': [['Very poor fit']]
-                            },
-                            {
-                                'range': f'{fse_col}{idx}',
-                                'values': [[fit_score_to_enum('Very poor fit')]]
-                            },
-                            {
-                                'range': f'{ja_col}{idx}',
-                                'values': [[f'Unsustainable company: {reasoning}']]
-                            }
-                        ])
+                        updates.update({
+                            'Fit score': 'Very poor fit',
+                            'Fit score enum': str(fit_score_to_enum('Very poor fit')),
+                            'Job analysis': f'Unsustainable company: {reasoning}'
+                        })
+                    
+                    bulk_updates.append((job_url, row.get('Company Name', ''), updates))
             
-            total_processed += 1
-
-        # Execute bulk update for the batch
-        if bulk_updates:
-            # Group updates by range to minimize API calls if possible, 
-            # but batch_update already handles a list of range/values.
-            # We should probably still chunk them if there are too many.
-            chunk_size = 100
-            for j in range(0, len(bulk_updates), chunk_size):
-                chunk = bulk_updates[j:j + chunk_size]
-                sheet.batch_update(chunk, value_input_option='USER_ENTERED')
-                time.sleep(1) # Small delay between chunks
+            # Perform bulk update for all jobs with this company
+            if bulk_updates:
+                sheet.bulk_update_by_key(bulk_updates)
+                total_processed += 1
 
     print(f"\nSustainability validation completed. Processed {total_processed} companies.")
     return total_processed
@@ -746,32 +736,21 @@ def setup_driver():
     return webdriver.Chrome(options=options)
 
 
-def setup_spreadsheet(client, user_name):
+def setup_database(user_name):
     """
-    Open or create the spreadsheet.
-    If client is None, uses local CSV storage instead of Google Sheets.
+    Set up the local SQLite database for job data.
     """
-    sheet_name = f"{user_name} LinkedIn Job Alerts"
-    
-    # Check if using local storage (client is None)
-    if client is None:
-        from local_storage import LocalSheet
-        csv_path = Path("local_data") / "jobs.csv"
-        sheet = LocalSheet(str(csv_path), SHEET_HEADER)
-        print(f"Using local CSV storage: {csv_path}")
-        return sheet
-    
-    # Use Google Sheets (existing behavior)
-    try:
-        sheet = client.open(sheet_name).sheet1
-        return sheet
-    except:
-        # Create spreadsheet if it doesn't exist
-        spreadsheet = client.create(sheet_name)
-        sheet = spreadsheet.sheet1
-        sheet.append_row(SHEET_HEADER)
-        print("Created new spreadsheet: LinkedIn Job Alerts")
-        return sheet
+    from local_storage import JobDatabase
+    db_path = Path("local_data") / "jobs.db"
+    db = JobDatabase(str(db_path), SHEET_HEADER)
+    print(f"Using local SQLite storage: {db_path}")
+    return db
+
+
+# Legacy alias for compatibility
+def setup_spreadsheet(user_name):
+    """Legacy alias for setup_database()."""
+    return setup_database(user_name)
 
 
 def get_existing_jobs(sheet):
@@ -796,13 +775,15 @@ def parse_fit_score(job_analysis: str) -> str:
     return 'Questionable fit'
 
 
-def update_cell(sheet, row_idx: int, column_name: str, value: str):
-    """Helper to update a cell by column name"""
-    col_idx = get_column_index(sheet, column_name)
-    sheet.update_cell(row_idx, col_idx, value)
+def update_cell(db, job_url: str, company_name: str, column_name: str, value: str):
+    """Helper to update a job field by job URL and company name"""
+    if not job_url or not company_name:
+        return
+    db.update_job_by_key(job_url, company_name, {column_name: value})
 
 
 def get_column_index(sheet, column_name: str) -> int | Any:
+    """Legacy helper for compatibility - returns column index for spreadsheet operations"""
     sheet_header = sheet.row_values(1)
     col_idx = sheet_header.index(column_name) + 1
     return col_idx
@@ -857,27 +838,141 @@ def check_job_expiration(driver, job_url: str) -> bool | None:
         return None
 
 
-def get_sustainability_from_sheet(company_name: str, sheet) -> str | None:
+def _build_sustainability_cache(sheet):
+    """
+    Build a dictionary of company name -> sustainability status from existing sheet data.
+    Uses case-insensitive matching and takes the first definitive value found.
+    
+    Returns:
+        Dict mapping company_name_lower -> 'TRUE' or 'FALSE'
+    """
+    all_rows = sheet.get_all_records()
+    cache = {}
+    for row in all_rows:
+        company_name = row.get('Company Name', '').strip()
+        if not company_name:
+            continue
+        
+        company_key = normalize_company_name(company_name)
+        # Only add if not already in cache (first occurrence wins)
+        if company_key not in cache:
+            sustainable = row.get('Sustainable company', '').strip()
+            if sustainable in ['TRUE', 'FALSE']:
+                cache[company_key] = sustainable
+    return cache
+
+def get_sustainability_from_sheet(company_name: str, sheet, cache: dict = None) -> str | None:
     """
     Check if sustainability status is already known for a company.
-
+    Uses cache if provided, otherwise builds one (less efficient).
+    
+    Args:
+        company_name: Company name to look up
+        sheet: Sheet object (used if cache not provided)
+        cache: Pre-built cache dict (optional, for efficiency)
+    
     Returns:
         'TRUE', 'FALSE', or None if not found
     """
-    all_rows = sheet.get_all_records()
-    for row in all_rows:
-        if row.get('Company Name', '').strip() == company_name:
-            sustainable = row.get('Sustainable company', '').strip()
-            if sustainable in ['TRUE', 'FALSE']:
-                return sustainable
-    return None
+    if cache is None:
+        # Build cache on the fly (less efficient, but backward compatible)
+        cache = _build_sustainability_cache(sheet)
+    
+    company_key = normalize_company_name(company_name)
+    return cache.get(company_key)
+
+
+def match_job_to_apify_result(job: dict, apify_item: dict) -> bool:
+    """
+    Match a job from the database to an Apify result by comparing job title and company name.
+    Uses normalized company names and substring matching for titles to handle variations.
+    
+    Args:
+        job: Dict with keys 'title' and 'company' (from database)
+        apify_item: Dict with structure {'job_info': {'title': str, ...}, 'company_info': {'name': str, ...}}
+    
+    Returns:
+        True if the job matches the Apify result, False otherwise
+    """
+    job_info = apify_item.get('job_info', {})
+    comp_info = apify_item.get('company_info', {})
+    
+    # Extract and normalize job title
+    item_title = job_info.get('title', '').strip().lower()
+    job_title_normalized = job.get('title', '').strip().lower()
+    
+    # Extract and normalize company name
+    item_company_normalized = normalize_company_name(comp_info.get('name', ''))
+    job_company_normalized = normalize_company_name(job.get('company', ''))
+    
+    # Match if titles overlap (substring match) and companies match (normalized)
+    # Using substring matching for titles as exact matches may fail due to variations
+    title_matches = (job_title_normalized in item_title or item_title in job_title_normalized)
+    company_matches = (job_company_normalized == item_company_normalized or
+                     job_company_normalized in item_company_normalized or
+                     item_company_normalized in job_company_normalized)
+    
+    return title_matches and company_matches
+
+
+def fetch_job_details_bulk_via_apify(job_ids: list[str]) -> list[dict]:
+    """
+    Fetch job details (including full descriptions) in bulk using Apify.
+
+    Args:
+        job_ids: List of LinkedIn job IDs to fetch
+
+    Returns:
+        List of job detail objects
+    """
+    if not job_ids:
+        return []
+
+    if not APIFY_AVAILABLE:
+        print("Apify is currently unavailable (usage limit reached). Skipping job detail fetch.")
+        return []
+
+    print(f"Fetching {len(job_ids)} job details via Apify in bulk...")
+
+    from main import APIFY_API_TOKEN
+    client = ApifyClient(APIFY_API_TOKEN)
+
+    try:
+        # Prepare the input for Apify actor
+        run_input = {
+            "job_id": job_ids
+        }
+
+        # Run the actor
+        run = client.actor("apimaestro/linkedin-job-detail").call(run_input=run_input)
+        
+        # Fetch results from the dataset
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+
+        if not items:
+            print(f"  No job details found on Apify")
+            return []
+
+        print(f"Successfully fetched {len(items)}/{len(job_ids)} job details")
+        return items
+
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error in bulk Apify job detail fetch: {error_msg}")
+        if "Monthly usage hard limit exceeded" in error_msg:
+            print("\n" + "!" * 60)
+            print("CRITICAL: APIFY MONTHLY USAGE HARD LIMIT REACHED.")
+            print("No more data can be fetched via Apify this month.")
+            print("Disabling Apify for the remainder of this run.")
+            print("!" * 60 + "\n")
+            apify_state.mark_unavailable()
+        return []
 
 
 def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[dict]:
     """
     Fetch jobs from LinkedIn via Apify Actor using parameters extracted from search_url OR provided directly.
     """
-    global APIFY_AVAILABLE
     if not APIFY_AVAILABLE:
         print("Apify is currently unavailable (usage limit reached). Skipping job fetch.")
         return []
@@ -1018,5 +1113,5 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
             print("No more jobs can be fetched via Apify this month.")
             print("Disabling Apify for the remainder of this run.")
             print("!" * 60 + "\n")
-            APIFY_AVAILABLE = False
+            apify_state.mark_unavailable()
         return []

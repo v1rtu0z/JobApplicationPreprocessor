@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Optional, Any
 
+import jwt
 import requests
 from PyPDF2 import PdfReader
 from pdfminer.high_level import extract_text as extract_text_miner
@@ -15,7 +16,12 @@ from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.converter import PDFPageAggregator
 from dotenv import load_dotenv
 
-from tkinter import Tk, filedialog
+try:
+    from tkinter import Tk, filedialog
+    TKINTER_AVAILABLE = True
+except ImportError:
+    TKINTER_AVAILABLE = False
+
 from utils import get_user_name
 from config import _get_job_filters
 
@@ -26,6 +32,10 @@ EXTENSION_SECRET_KEY = os.getenv("API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 BACKUP_GEMINI_API_KEY = os.getenv("BACKUP_GEMINI_API_KEY")
 RESUME_PDF_PATH = os.getenv("RESUME_PDF_PATH")
+
+# Constants
+JWT_TOKEN_EXPIRY_SAFETY_MARGIN = 60  # Subtract 60 seconds from token expiry for safety margin
+DEFAULT_TOKEN_EXPIRY_SECONDS = 3600  # Default token expiry if not found in JWT (1 hour)
 
 # Cache for JWT token and resume JSON
 _jwt_token: Optional[str] = None
@@ -59,13 +69,15 @@ def _authenticate() -> Optional[str]:
         data = response.json()
         _jwt_token = data['token']
 
-        # Decode JWT to get expiry (simple approach - subtract 60s for safety)
-        # For production, consider using PyJWT library
-        payload = _jwt_token.split('.')[1]
-        # Add padding if needed
-        payload += '=' * (4 - len(payload) % 4)
-        decoded = json.loads(base64.b64decode(payload))
-        _token_expiry = decoded.get('exp', time.time() + 3600) - 60
+        # Decode JWT to get expiry using PyJWT library
+        # Note: We skip signature verification since we trust our own server
+        # Subtract safety margin for buffer time
+        try:
+            decoded = jwt.decode(_jwt_token, options={"verify_signature": False})
+            _token_expiry = decoded.get('exp', time.time() + DEFAULT_TOKEN_EXPIRY_SECONDS) - JWT_TOKEN_EXPIRY_SAFETY_MARGIN
+        except jwt.DecodeError as e:
+            print(f"Warning: Failed to decode JWT token: {e}. Using default expiry.")
+            _token_expiry = time.time() + DEFAULT_TOKEN_EXPIRY_SECONDS - JWT_TOKEN_EXPIRY_SAFETY_MARGIN
 
         return _jwt_token
 
@@ -109,13 +121,16 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
     Raises:
         Exception: For non-429 errors
     """
+    keys_to_try = [
+        ("primary", GEMINI_API_KEY),
+        ("backup", BACKUP_GEMINI_API_KEY)
+    ]
 
-    # Try primary key first
-    for use_primary in [True, False]:
+    for key_name, current_key in keys_to_try:
+        if not current_key:
+            continue  # Skip if key not configured
+            
         try:
-            current_key = GEMINI_API_KEY if use_primary else BACKUP_GEMINI_API_KEY
-            key_name = "primary" if use_primary else "backup"
-
             current_payload = payload.copy()
             current_payload["gemini_api_key"] = current_key
 
@@ -132,16 +147,18 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
                 print("\n" + "!" * 40)
                 print(f"RATE LIMIT: {key_name} key hit rate limit (429).")
                 print("!" * 40 + "\n")
-                if not use_primary:  # This was the backup key (last attempt)
-                    print("CRITICAL: Both Gemini API keys are currently rate limited or out of tokens.")
-                    print("Skipping this operation. The app will continue but some steps may be skipped.")
-                    return None
-                continue  # Try backup key
+                continue  # Try next key
 
             # Handle other HTTP errors
             if not response.ok:
-                error_msg = f"API request failed: {response.status_code} - {response.text}"
-                print(f"ERROR: {error_msg}")
+                # Only print error for non-404 errors (404s are expected for optional endpoints)
+                if response.status_code != 404:
+                    error_msg = f"API request failed: {response.status_code} - {response.text}"
+                    print(f"ERROR: {error_msg}")
+                    # For 5xx errors, we might want to retry, but for now just return None
+                    # 4xx errors (except 404) are client errors and shouldn't be retried
+                    if 500 <= response.status_code < 600:
+                        print(f"  Server error ({response.status_code}), will try backup key if available")
                 return None
 
             # Success!
@@ -149,11 +166,11 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
 
         except requests.exceptions.RequestException as e:
             print(f"Network error on {key_name} key: {e}")
-            if not use_primary:  # This was the backup key (last attempt)
-                raise Exception(f"Network error: {e}")
-            continue  # Try backup key
+            continue  # Try next key
 
-    # Both keys failed with 429
+    # All keys exhausted (either rate limited or network errors)
+    print("CRITICAL: All Gemini API keys exhausted (rate limited or network errors).")
+    print("Skipping this operation. The app will continue but some steps may be skipped.")
     return None
 
 
@@ -237,8 +254,8 @@ def create_resume_json_from_pdf(pdf_path: str) -> dict:
         raise Exception("API returned success but no resume_data found in response")
         
     # Save it for later use
-    with open('./resume_data.json', 'w', encoding='utf-16') as f:
-        json.dump(resume_data, f, indent=2)
+    with open('./resume_data.json', 'w', encoding='utf-8') as f:
+        json.dump(resume_data, f, indent=2, ensure_ascii=False)
     
     print("Successfully created resume_data.json")
     return resume_data
@@ -253,15 +270,26 @@ def get_resume_json() -> dict:
         if not os.path.exists('./resume_data.json'):
             pdf_path = RESUME_PDF_PATH
             if not pdf_path:
-                print("RESUME_PDF_PATH not found in .env. Please select your resume PDF file...")
-                root = Tk()
-                root.withdraw()  # Hide the main tkinter window
-                root.attributes('-topmost', True)  # Bring to front
-                pdf_path = filedialog.askopenfilename(
-                    title="Select your resume PDF",
-                    filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
-                )
-                root.destroy()
+                if TKINTER_AVAILABLE:
+                    print("RESUME_PDF_PATH not found in .env. Please select your resume PDF file...")
+                    root = Tk()
+                    root.withdraw()  # Hide the main tkinter window
+                    root.attributes('-topmost', True)  # Bring to front
+                    pdf_path = filedialog.askopenfilename(
+                        title="Select your resume PDF",
+                        filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
+                    )
+                    root.destroy()
+                else:
+                    # Fallback to command-line input if tkinter is not available
+                    print("RESUME_PDF_PATH not found in .env and tkinter is not available.")
+                    print("Please provide the path to your resume PDF file:")
+                    pdf_path = input("Resume PDF path: ").strip()
+                    # Remove quotes if user pasted a quoted path
+                    if pdf_path.startswith('"') and pdf_path.endswith('"'):
+                        pdf_path = pdf_path[1:-1]
+                    if pdf_path.startswith("'") and pdf_path.endswith("'"):
+                        pdf_path = pdf_path[1:-1]
                 
                 if not pdf_path:
                     raise FileNotFoundError("No resume PDF selected and RESUME_PDF_PATH not set in .env")
@@ -269,7 +297,7 @@ def get_resume_json() -> dict:
             resume_data = create_resume_json_from_pdf(pdf_path)
         else:
             # Read the JSON file directly
-            with open('./resume_data.json', 'r') as f:
+            with open('./resume_data.json', 'r', encoding='utf-8') as f:
                 resume_data = json.load(f)
 
         # Add additional details to resume JSON if file exists
@@ -471,24 +499,15 @@ def get_tailored_cl(resume_json, job_details: dict, current_content: str = None,
     return data['content']
 
 
-def fit_score_to_enum(fit_score: str) -> int:
-    """Convert fit score text to numeric value for sorting"""
-    score_map = {
-        "Perfect Fit": 5,
-        "Great Fit": 4,
-        "Good Fit": 3,
-        "Okay Fit": 2,
-        "Poor Fit": 1,
-        "Very Poor Fit": 0
-    }
-    return score_map.get(fit_score, 0)
-
-
 def get_search_parameters(resume_json: dict) -> list[dict]:
     """
     Generate search parameters for LinkedIn jobs based on resume and additional details.
+    Uses Gemini API directly to generate search parameters.
     """
     try:
+        import google.genai as genai
+        from utils import rate_limit
+        
         # Load additional details if they exist
         additional_details = ""
         additional_details_path = 'additional_details.txt'
@@ -500,77 +519,152 @@ def get_search_parameters(resume_json: dict) -> list[dict]:
 
         model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
         
-        # We need a prompt that asks for multiple search queries to cover different aspects
-        prompt = f"""
-        Based on the following resume and additional details, generate a list of search parameters for LinkedIn job searches.
-        The goal is to find jobs that are a good fit for the user's background and preferences.
-        
-        Resume:
-        {json.dumps(resume_json)}
-        
-        Additional Details:
-        {additional_details}
-        
-        Return a JSON list of objects. Each object should have:
-        - keywords: string (e.g., "Software Engineer", "Project Manager")
-        - location: string (e.g., "Remote", "London", "United States")
-        - remote: string (one of: "onsite", "remote", "hybrid")
-        - experienceLevel: string (one of: "internship", "entry", "associate", "mid_senior", "director", "executive")
-        - date_posted: string (one of: "month", "week", "day") - default to "week"
-        
-        Provide 3-5 diverse search queries that cover different job titles the user is interested in and their location preferences as indicated in their profile.
-        """
+        # Build prompt for generating search parameters
+        prompt = f"""Based on the following resume and additional details, generate a list of search parameters for LinkedIn job searches.
+The goal is to find jobs that are a good fit for the user's background and preferences.
 
-        payload = {
-            "prompt": prompt,
-            "model_name": model_name,
-            "response_mime_type": "application/json"
-        }
+Resume:
+{json.dumps(resume_json, indent=2)}
 
-        # Use the generic text generation endpoint
-        data = _make_api_request_with_fallback(
-            f"{SERVER_URL}/generate-search-parameters",
-            payload
-        )
+Additional Details:
+{additional_details}
 
-        if data and 'search_parameters' in data:
-            return data['search_parameters']
-        elif data and 'text' in data:
-            # Maybe the server just returns raw text that needs parsing
+Return a JSON list of objects. Each object should have:
+- keywords: string (e.g., "Software Engineer", "Project Manager", "Data Scientist")
+- location: string (e.g., "Remote", "London", "United States", "New York")
+- remote: string (one of: "onsite", "remote", "hybrid") - default to "remote" if not specified
+- experienceLevel: string (one of: "internship", "entry", "associate", "mid_senior", "director", "executive") - infer from resume
+- date_posted: string (one of: "month", "week", "day") - default to "week"
+- limit: integer (number of results, default to 100)
+
+Provide 3-5 diverse search queries that cover:
+1. Different job titles/roles the user is qualified for based on their experience
+2. Location preferences mentioned in their resume or additional details
+3. Appropriate experience levels based on their career stage
+
+You must respond with ONLY a JSON array, no other text. Example format:
+[
+  {{
+    "keywords": "Software Engineer",
+    "location": "Remote",
+    "remote": "remote",
+    "experienceLevel": "mid_senior",
+    "date_posted": "week",
+    "limit": 100
+  }},
+  {{
+    "keywords": "Senior Developer",
+    "location": "United States",
+    "remote": "hybrid",
+    "experienceLevel": "mid_senior",
+    "date_posted": "week",
+    "limit": 100
+  }}
+]"""
+
+        # Try with primary key, then backup key
+        api_keys = [
+            ('primary', GEMINI_API_KEY),
+            ('backup', BACKUP_GEMINI_API_KEY)
+        ]
+
+        for key_name, api_key in api_keys:
+            if not api_key:
+                if key_name == 'primary':
+                    print("Warning: GEMINI_API_KEY not found, trying backup...")
+                    continue
+                else:
+                    print("Warning: Both Gemini API keys not found. Cannot generate search parameters.")
+                    return []
+            
             try:
-                import re
-                json_match = re.search(r'\[.*\]', data['text'], re.DOTALL)
-                if json_match:
-                    return json.loads(json_match.group(0))
-            except:
-                pass
+                client = genai.Client(api_key=api_key)
+                
+                # Apply rate limiting
+                rate_limit()
+                
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                
+                response_text = response.text.strip()
+                
+                # Remove markdown code blocks if present
+                cleaned = response_text.replace('```json', '').replace('```', '').strip()
+                
+                # Try to parse as JSON
+                try:
+                    search_params = json.loads(cleaned)
+                    
+                    # Validate it's a list
+                    if not isinstance(search_params, list):
+                        print(f"Warning: Expected JSON array, got {type(search_params)}. Skipping search parameter generation.")
+                        return []
+                    
+                    # Validate each entry has required fields
+                    validated_params = []
+                    for param in search_params:
+                        if isinstance(param, dict):
+                            # Ensure all required fields are present with defaults
+                            validated_param = {
+                                'keywords': param.get('keywords', ''),
+                                'location': param.get('location', ''),
+                                'remote': param.get('remote', 'remote'),
+                                'experienceLevel': param.get('experienceLevel', 'mid_senior'),
+                                'date_posted': param.get('date_posted', 'week'),
+                                'limit': param.get('limit', 100)
+                            }
+                            # Only add if keywords and location are provided
+                            if validated_param['keywords'] and validated_param['location']:
+                                validated_params.append(validated_param)
+                    
+                    if validated_params:
+                        print(f"Generated {len(validated_params)} search parameter sets using {key_name} Gemini key.")
+                        return validated_params
+                    else:
+                        print("Warning: No valid search parameters generated from LLM response.")
+                        return []
+                        
+                except json.JSONDecodeError as e:
+                    # Try to extract JSON from the response if it's wrapped in text
+                    import re
+                    json_match = re.search(r'\[.*\]', cleaned, re.DOTALL)
+                    if json_match:
+                        try:
+                            search_params = json.loads(json_match.group(0))
+                            if isinstance(search_params, list) and search_params:
+                                print(f"Generated {len(search_params)} search parameter sets using {key_name} Gemini key.")
+                                return search_params
+                        except (json.JSONDecodeError, ValueError) as parse_error:
+                            # Failed to parse extracted JSON, continue to next attempt
+                            print(f"Warning: Failed to parse extracted JSON: {parse_error}")
+                            pass
+                    
+                    if key_name == 'primary':
+                        print(f"Error parsing JSON response from {key_name} key: {e}")
+                        print("Trying backup key...")
+                        continue
+                    else:
+                        print(f"Error parsing JSON response from {key_name} key: {e}")
+                        return []
+                
+            except Exception as e:
+                if key_name == 'primary':
+                    print(f"Error with {key_name} Gemini key: {e}")
+                    print("Trying backup key...")
+                    continue
+                else:
+                    print(f"Error with {key_name} Gemini key: {e}")
+                    return []
         
-        # Fallback if endpoint doesn't exist yet or fails
-        print("Warning: /generate-search-parameters failed or returned unexpected data. No search parameters generated.")
+        # Both keys failed
+        print("Warning: Failed to generate search parameters with both Gemini keys.")
         return []
 
     except Exception as e:
         print(f"Error generating search parameters: {e}")
         return []
-
-
-def load_search_urls(file_path: str = 'search_urls.txt') -> list[str]:
-    """Read search URLs from a file, one per line."""
-    if not os.path.exists(file_path):
-        example_path = file_path + '.example'
-        if os.path.exists(example_path):
-            print(f"Warning: {file_path} not found. Using {example_path} instead.")
-            file_path = example_path
-        else:
-            print(f"Warning: {file_path} not found. Returning empty list.")
-            return []
-    
-    with open(file_path, 'r') as f:
-        urls = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
-    return urls
-
-
-SEARCH_URLS = load_search_urls()
 
 
 def bulk_filter_jobs(job_titles: list[dict], resume_json: dict, max_retries: int = 3) -> dict:

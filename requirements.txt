@@ -1,11 +1,6 @@
 requests
 python-dotenv
 google-genai
-gspread
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
 html2text
 apify-client
 linkedin-scraper
@@ -16,3 +11,5 @@ PyPDF2
 pdfminer.six
 PyJWT
 PyYAML
+streamlit
+pandas

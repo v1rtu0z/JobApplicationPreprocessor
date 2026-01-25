@@ -1,265 +1,460 @@
-import csv
 import re
+import sqlite3
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 
-class LocalSheet:
+class JobDatabase:
     """
-    A local CSV-based implementation that mimics gspread's Sheet interface.
-    Stores job data in CSV format with the same column structure as Google Sheets.
+    SQLite database for storing job application data.
+    
+    Note: This is a single-threaded application, so no thread locks are needed.
+    SQLite connections are created with check_same_thread=False for compatibility.
     """
     
-    def __init__(self, csv_path: str, header: List[str]):
+    def __init__(self, db_path: str, columns: List[str]):
         """
-        Initialize LocalSheet with CSV file path and header.
+        Initialize the job database.
         
         Args:
-            csv_path: Path to the CSV file
-            header: List of column names (header row)
+            db_path: Path to the SQLite database file
+            columns: List of column names for the jobs table
         """
-        self.csv_path = Path(csv_path)
-        self.header = header
-        self._ensure_file_exists()
+        self.db_path = Path(db_path)
+        self.columns = columns
+        self._ensure_database_exists()
     
-    def _ensure_file_exists(self):
-        """Ensure CSV file exists with proper header."""
-        if not self.csv_path.exists():
-            self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
-                f.write("sep=,\n")
-                writer = csv.writer(f)
-                writer.writerow(self.header)
-        else:
-            # Verify header matches
-            with open(self.csv_path, 'r', encoding='utf-8') as f:
-                line = f.readline()
-                if line.strip() == "sep=,":
-                    reader = csv.reader(f)
-                else:
-                    # No sep=, line, reset to start
-                    f.seek(0)
-                    reader = csv.reader(f)
-                
-                existing_header = next(reader, None)
-                if existing_header != self.header:
-                    print(f"Warning: CSV header mismatch. Expected {len(self.header)} columns, found {len(existing_header) if existing_header else 0}")
+    def _get_connection(self):
+        """Get a database connection."""
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    
+    def _ensure_database_exists(self):
+        """Ensure SQLite database exists with proper schema."""
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Create jobs table if it doesn't exist
+        columns_sql = ', '.join([f'"{col}" TEXT' for col in self.columns])
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {columns_sql}
+            )
+        ''')
+        
+        # Add any missing columns (schema migration)
+        cursor.execute("PRAGMA table_info(jobs)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        
+        for col in self.columns:
+            if col not in existing_columns:
+                cursor.execute(f'ALTER TABLE jobs ADD COLUMN "{col}" TEXT')
+        
+        conn.commit()
+        
+        # Create indexes for frequently queried columns
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_job_url ON jobs("Job URL")')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_company_name ON jobs("Company Name")')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_job_url_company ON jobs("Job URL", "Company Name")')
+            conn.commit()
+        except Exception:
+            pass  # Index creation might fail if columns don't exist yet
+        
+        # Fix ID gaps if any
+        cursor.execute("SELECT COUNT(*), MAX(id) FROM jobs")
+        count, max_id = cursor.fetchone()
+        if count and count > 0 and max_id != count:
+            print(f"Fixing ID gaps in {self.db_path}...")
+            self._realign_ids(cursor)
+            conn.commit()
+            
+        conn.close()
+
+    def _realign_ids(self, cursor):
+        """Re-number all IDs sequentially from 1."""
+        columns = ', '.join([f'"{col}"' for col in self.columns])
+        cursor.execute(f"CREATE TEMPORARY TABLE jobs_backup AS SELECT {columns} FROM jobs ORDER BY id")
+        cursor.execute("DELETE FROM jobs")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
+        cursor.execute(f"INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_backup")
+        cursor.execute("DROP TABLE jobs_backup")
+    
+    def get_all_jobs(self) -> List[Dict[str, str]]:
+        """Get all jobs as a list of dictionaries."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            columns = ', '.join([f'"{col}"' for col in self.columns])
+            cursor.execute(f'SELECT id, {columns} FROM jobs ORDER BY id')
+            
+            jobs = []
+            for row in cursor.fetchall():
+                job = {'_id': row[0]}  # Include internal ID
+                for i, col in enumerate(self.columns):
+                    value = row[i + 1]
+                    job[col] = str(value) if value is not None else ''
+                jobs.append(job)
+            return jobs
+        finally:
+            conn.close()
+    
+    def count(self) -> int:
+        """Get the total number of jobs."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM jobs')
+            return cursor.fetchone()[0]
+        finally:
+            conn.close()
+    
+    def add_jobs(self, jobs: List[Dict[str, str]]):
+        """
+        Add multiple jobs to the database.
+        
+        Args:
+            jobs: List of job dictionaries with column names as keys
+        """
+        if not jobs:
+            return
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        columns = ', '.join([f'"{col}"' for col in self.columns])
+        placeholders = ', '.join(['?' for _ in self.columns])
+        insert_sql = f'INSERT INTO jobs ({columns}) VALUES ({placeholders})'
+        
+        for job in jobs:
+            values = [str(job.get(col, '')) if job.get(col) is not None else '' for col in self.columns]
+            cursor.execute(insert_sql, values)
+        
+        conn.commit()
+        conn.close()
+    
+    def add_jobs_from_rows(self, rows: List[List[str]]):
+        """
+        Add multiple jobs from row data (list of values matching column order).
+        
+        Args:
+            rows: List of lists, where each inner list contains values in column order
+        """
+        if not rows:
+            return
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        columns = ', '.join([f'"{col}"' for col in self.columns])
+        placeholders = ', '.join(['?' for _ in self.columns])
+        insert_sql = f'INSERT INTO jobs ({columns}) VALUES ({placeholders})'
+        
+        for row in rows:
+            # Pad row to match column count
+            padded = list(row) + [''] * (len(self.columns) - len(row))
+            padded = padded[:len(self.columns)]
+            padded = [str(v) if v is not None else '' for v in padded]
+            cursor.execute(insert_sql, padded)
+        
+        conn.commit()
+        conn.close()
+    
+    def update_job(self, job_id: int, updates: Dict[str, str]):
+        """
+        Update a single job by its ID.
+        
+        Args:
+            job_id: The job's database ID
+            updates: Dictionary of column_name -> new_value
+        """
+        if not updates:
+            return
+        
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            set_clause = ", ".join([f'"{k}" = ?' for k in updates.keys()])
+            values = [str(v) if v is not None else '' for v in updates.values()]
+            cursor.execute(f'UPDATE jobs SET {set_clause} WHERE id = ?', values + [job_id])
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def update_job_by_key(self, job_url: str, company: str, updates: Dict[str, str]) -> int:
+        """
+        Update a job by its URL and company name.
+        
+        Args:
+            job_url: The job URL
+            company: The company name
+            updates: Dictionary of column_name -> new_value
+            
+        Returns:
+            Number of rows affected
+        """
+        if not updates:
+            return 0
+        
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            set_clause = ", ".join([f'"{k}" = ?' for k in updates.keys()])
+            values = [str(v) if v is not None else '' for v in updates.values()]
+            cursor.execute(
+                f'UPDATE jobs SET {set_clause} WHERE "Job URL" = ? AND "Company Name" = ?',
+                values + [job_url, company]
+            )
+            row_count = cursor.rowcount
+            conn.commit()
+            return row_count
+        finally:
+            conn.close()
+    
+    def bulk_update(self, updates: List[tuple]):
+        """
+        Update multiple jobs efficiently.
+        
+        Args:
+            updates: List of (job_id, updates_dict) tuples
+        """
+        if not updates:
+            return
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        for job_id, update_dict in updates:
+            if update_dict:
+                set_clause = ", ".join([f'"{k}" = ?' for k in update_dict.keys()])
+                values = [str(v) if v is not None else '' for v in update_dict.values()]
+                cursor.execute(f'UPDATE jobs SET {set_clause} WHERE id = ?', values + [job_id])
+        
+        conn.commit()
+        conn.close()
+    
+    def bulk_update_by_key(self, updates: List[tuple]):
+        """
+        Update multiple jobs efficiently using job URL and company name.
+        
+        Args:
+            updates: List of (job_url, company_name, updates_dict) tuples
+        """
+        if not updates:
+            return
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        for job_url, company_name, update_dict in updates:
+            if update_dict:
+                set_clause = ", ".join([f'"{k}" = ?' for k in update_dict.keys()])
+                values = [str(v) if v is not None else '' for v in update_dict.values()]
+                cursor.execute(
+                    f'UPDATE jobs SET {set_clause} WHERE "Job URL" = ? AND "Company Name" = ?',
+                    values + [job_url, company_name]
+                )
+        
+        conn.commit()
+        conn.close()
+    
+    def sort_by(self, sort_specs: List[tuple]):
+        """
+        Sort jobs by specified columns.
+        
+        Args:
+            sort_specs: List of (column_name, ascending) tuples
+                Example: [('Fit score enum', False), ('Location Priority', True)]
+        """
+        if not sort_specs:
+            return
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Build ORDER BY clause
+        numeric_columns = {'Location Priority', 'Fit score enum'}
+        order_clauses = []
+        
+        for col_name, ascending in sort_specs:
+            direction = 'ASC' if ascending else 'DESC'
+            if col_name in numeric_columns:
+                order_clauses.append(f'CAST(COALESCE("{col_name}", "0") AS INTEGER) {direction}')
+            else:
+                order_clauses.append(f'"{col_name}" {direction}')
+        
+        order_by = ', '.join(order_clauses)
+        columns = ', '.join([f'"{col}"' for col in self.columns])
+        
+        # Re-sort by creating temp table and re-inserting
+        cursor.execute(f'CREATE TEMPORARY TABLE jobs_sorted AS SELECT {columns} FROM jobs ORDER BY {order_by}')
+        cursor.execute('DELETE FROM jobs')
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
+        cursor.execute(f'INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_sorted')
+        cursor.execute('DROP TABLE jobs_sorted')
+        
+        conn.commit()
+        conn.close()
+    
+    def get_column_index(self, column_name: str) -> int:
+        """Get the index of a column by name (0-indexed)."""
+        return self.columns.index(column_name)
+
+    # =========================================================================
+    # Legacy compatibility methods (for gradual migration)
+    # =========================================================================
+    
+    @property
+    def header(self) -> List[str]:
+        """Legacy: Return column names (for compatibility)."""
+        return self.columns
     
     def get_all_records(self) -> List[Dict[str, str]]:
-        """
-        Get all rows as a list of dictionaries.
-        Returns empty list if file is empty or only has header.
-        """
-        records = []
-        if not self.csv_path.exists():
-            return records
-        
-        with open(self.csv_path, 'r', encoding='utf-8') as f:
-            line = f.readline()
-            if line.strip() != "sep=,":
-                f.seek(0)
-            
-            reader = csv.DictReader(f)
-            for row in reader:
-                # Convert empty strings to empty strings (keep as is)
-                records.append({k: v for k, v in row.items()})
-        
-        return records
+        """Legacy: Alias for get_all_jobs() without _id field."""
+        jobs = self.get_all_jobs()
+        # Remove internal _id from results
+        return [{k: v for k, v in job.items() if k != '_id'} for job in jobs]
     
     def append_rows(self, rows: List[List[str]]):
-        """
-        Append rows to the CSV file.
-        
-        Args:
-            rows: List of lists, where each inner list represents a row
-        """
-        with open(self.csv_path, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            for row in rows:
-                # Ensure row has same length as header
-                padded_row = row + [''] * (len(self.header) - len(row))
-                writer.writerow(padded_row[:len(self.header)])
+        """Legacy: Alias for add_jobs_from_rows()."""
+        self.add_jobs_from_rows(rows)
     
-    def append_row(self, row: List[str]):
-        """Append a single row to the CSV file."""
-        self.append_rows([row])
+    def get_all_values(self) -> List[List[str]]:
+        """Legacy: Get all rows as list of lists including header."""
+        jobs = self.get_all_records()
+        result = [self.columns]
+        for job in jobs:
+            result.append([job.get(col, '') for col in self.columns])
+        return result
+    
+    def row_values(self, row: int) -> List[str]:
+        """Legacy: Get values from a specific row (1-indexed, row 1 = header)."""
+        if row == 1:
+            return self.columns
+        
+        # Get all jobs ordered by ID to maintain consistent row ordering
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            columns = ', '.join([f'"{col}"' for col in self.columns])
+            cursor.execute(f'SELECT id, {columns} FROM jobs ORDER BY id')
+            all_rows = cursor.fetchall()
+            
+            # Row 1 is header, so row 2 is first data row (index 0 in all_rows)
+            row_index = row - 2
+            if row_index < 0 or row_index >= len(all_rows):
+                return []
+            
+            row_data = all_rows[row_index]
+            # Skip the id column (index 0), return only data columns
+            return [str(row_data[i + 1]) if row_data[i + 1] is not None else '' for i in range(len(self.columns))]
+        finally:
+            conn.close()
     
     def update_cell(self, row: int, col: int, value: str):
-        """
-        Update a single cell.
+        """Legacy: Update a single cell (1-indexed row/col, row 1 = header)."""
+        if row < 2:
+            raise ValueError("Cannot update header row")
         
-        Args:
-            row: Row number (1-indexed, where 1 is header)
-            col: Column number (1-indexed)
-        """
-        records = self.get_all_records()
+        job_id = row - 1
+        col_name = self.columns[col - 1]
+        self.update_job(job_id, {col_name: value})
+    
+    def update_record_by_fields(self, filter_dict: Dict[str, str], update_dict: Dict[str, str]) -> int:
+        """Legacy: Update records matching filter criteria."""
+        if not filter_dict or not update_dict:
+            return 0
         
-        # Convert to 0-indexed
-        row_idx = row - 2  # -2 because row 1 is header, row 2 is first data row
-        
-        if row_idx < 0:
-            raise ValueError(f"Row {row} is header row, cannot update")
-        
-        if row_idx >= len(records):
-            # Pad with empty rows if needed
-            while len(records) <= row_idx:
-                records.append({col: '' for col in self.header})
-        
-        col_name = self.header[col - 1]  # Convert to 0-indexed
-        records[row_idx][col_name] = str(value) if value is not None else ''
-        
-        self._write_all_records(records)
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            set_clause = ", ".join([f'"{k}" = ?' for k in update_dict.keys()])
+            where_clause = " AND ".join([f'"{k}" = ?' for k in filter_dict.keys()])
+            values = [str(v) if v is not None else '' for v in update_dict.values()]
+            values += [str(v) if v is not None else '' for v in filter_dict.values()]
+            cursor.execute(f'UPDATE jobs SET {set_clause} WHERE {where_clause}', values)
+            row_count = cursor.rowcount
+            conn.commit()
+            return row_count
+        finally:
+            conn.close()
     
     def batch_update(self, updates: List[Dict[str, Any]], value_input_option: Optional[str] = None):
         """
-        Batch update multiple cells.
+        Legacy: Batch update with A1 notation (for compatibility).
         
         Args:
-            updates: List of dicts with 'range' and 'values' keys
-                Example: [{'range': 'A2', 'values': [['value']]}]
-            value_input_option: Ignored for local storage (kept for compatibility)
+            updates: List of {'range': 'A2', 'values': [['value']]} dicts
+            value_input_option: Ignored (gspread compatibility)
         """
-        records = self.get_all_records()
+        if not updates:
+            return
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
         
         for update in updates:
             range_str = update['range']
             values = update['values']
             
-            # Parse A1 notation (e.g., 'A2', 'B5')
+            # Parse A1 notation
             match = re.match(r'([A-Z]+)(\d+)', range_str)
             if not match:
-                print(f"Warning: Could not parse range '{range_str}', skipping")
                 continue
             
             col_letter = match.group(1)
             row_num = int(match.group(2))
             
-            # Convert column letter to index (A=1, B=2, etc.)
-            col_idx = self._column_letter_to_index(col_letter)
+            # Convert column letter to index
+            col_idx = 0
+            for char in col_letter:
+                col_idx = col_idx * 26 + (ord(char.upper()) - ord('A') + 1)
             
-            if col_idx < 1 or col_idx > len(self.header):
-                print(f"Warning: Column {col_letter} ({col_idx}) out of range, skipping")
+            if col_idx < 1 or col_idx > len(self.columns) or row_num < 2:
                 continue
             
-            # Update cell(s)
-            row_idx = row_num - 2  # -2 because row 1 is header
+            job_id = row_num - 1
             
-            if row_idx < 0:
-                print(f"Warning: Cannot update header row (row {row_num}), skipping")
-                continue
-            
-            # Ensure records list is large enough
-            while len(records) <= row_idx:
-                records.append({col: '' for col in self.header})
-            
-            col_name = self.header[col_idx - 1]
-            
-            # Handle multiple values (for ranges like A2:B2)
-            if values:
-                for i, value_row in enumerate(values):
-                    if i == 0:
-                        # First value goes to the specified cell
-                        records[row_idx][col_name] = str(value_row[0]) if value_row else ''
-                    else:
-                        # Additional values go to subsequent columns
-                        if col_idx + i <= len(self.header):
-                            next_col_name = self.header[col_idx + i - 1]
-                            records[row_idx][next_col_name] = str(value_row[0]) if value_row else ''
+            for row_offset, value_row in enumerate(values):
+                current_job_id = job_id + row_offset
+                for col_offset, val in enumerate(value_row):
+                    current_col_idx = col_idx + col_offset
+                    if current_col_idx <= len(self.columns):
+                        col_name = self.columns[current_col_idx - 1]
+                        cursor.execute(
+                            f'UPDATE jobs SET "{col_name}" = ? WHERE id = ?',
+                            (str(val) if val is not None else '', current_job_id)
+                        )
         
-        self._write_all_records(records)
+        conn.commit()
+        conn.close()
     
     def sort(self, *sort_specs):
         """
-        Sort rows by specified columns.
+        Legacy: Sort with column indices and 'asc'/'des' strings.
         
         Args:
             *sort_specs: Tuples of (column_index, order) where order is 'asc' or 'des'
-                Example: sort((5, 'des'), (3, 'asc'))
         """
-        records = self.get_all_records()
-        
-        if not records:
-            return
-        
-        # Build list of key functions for multi-level sorting
-        key_functions = []
+        converted = []
         for col_idx, order in sort_specs:
-            col_name = self.header[col_idx - 1]  # Convert to 0-indexed
-            
-            def make_key_func(name, direction):
-                def key_func(record):
-                    value = record.get(name, '')
-                    # Handle numeric values for enum columns
-                    try:
-                        num_value = int(value) if value else 0
-                        # Negate for descending order
-                        return -num_value if direction == 'des' else num_value
-                    except ValueError:
-                        # String comparison - for descending, use reversed comparison
-                        if direction == 'des':
-                            # Use a wrapper that will be sorted in reverse
-                            return (1, value)  # 1 indicates descending
-                        else:
-                            return (0, value)  # 0 indicates ascending
-                return key_func
-            
-            key_functions.append(make_key_func(col_name, order))
-        
-        # Sort using multiple keys
-        def multi_key(record):
-            return tuple(f(record) for f in key_functions)
-        
-        records.sort(key=multi_key)
-        
-        self._write_all_records(records)
-    
-    def row_values(self, row: int) -> List[str]:
-        """
-        Get values from a specific row.
-        
-        Args:
-            row: Row number (1-indexed, where 1 is header)
-        
-        Returns:
-            List of cell values
-        """
-        if row == 1:
-            return self.header
-        
-        records = self.get_all_records()
-        row_idx = row - 2  # -2 because row 1 is header
-        
-        if row_idx < 0 or row_idx >= len(records):
-            return []
-        
-        record = records[row_idx]
-        return [record.get(col, '') for col in self.header]
-    
-    def _write_all_records(self, records: List[Dict[str, str]]):
-        """Write all records back to CSV file."""
-        with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
-            f.write("sep=,\n")
-            writer = csv.DictWriter(f, fieldnames=self.header)
-            writer.writeheader()
-            writer.writerows(records)
-    
-    def _column_letter_to_index(self, col_letter: str) -> int:
-        """
-        Convert column letter (A, B, C, ..., Z, AA, AB, ...) to 1-indexed column number.
-        
-        Args:
-            col_letter: Column letter(s) (e.g., 'A', 'B', 'AA')
-        
-        Returns:
-            1-indexed column number
-        """
-        result = 0
-        for char in col_letter:
-            result = result * 26 + (ord(char.upper()) - ord('A') + 1)
-        return result
+            col_name = self.columns[col_idx - 1]
+            ascending = order != 'des'
+            converted.append((col_name, ascending))
+        self.sort_by(converted)
 
 
+# Alias for backward compatibility
+LocalSheet = JobDatabase
+
+
+# =========================================================================
 # File storage functions
+# =========================================================================
 
 def ensure_local_directories():
     """Ensure local storage directories exist."""
@@ -274,41 +469,20 @@ def ensure_local_directories():
 
 
 def save_resume_local(pdf_bytes: bytes, filename: str) -> str:
-    """
-    Save PDF bytes to local resumes directory.
-    
-    Args:
-        pdf_bytes: PDF file bytes
-        filename: Filename for the resume
-    
-    Returns:
-        Relative path to the saved file
-    """
+    """Save PDF bytes to local resumes directory."""
     _, resumes_dir, _ = ensure_local_directories()
-    
     file_path = resumes_dir / filename
     
     with open(file_path, 'wb') as f:
         f.write(pdf_bytes)
     
-    # Return relative path
     return str(Path("local_data") / "resumes" / filename)
 
 
 def save_cover_letter_local(cover_letter_text: str, filename: str) -> str:
-    """
-    Save cover letter text to local cover_letters directory.
-    
-    Args:
-        cover_letter_text: Cover letter content as string
-        filename: Filename for the cover letter (without extension)
-    
-    Returns:
-        Relative path to the saved file
-    """
+    """Save cover letter text to local cover_letters directory."""
     _, _, cover_letters_dir = ensure_local_directories()
     
-    # Ensure filename has .txt extension
     if not filename.endswith('.txt'):
         filename = f"{filename}.txt"
     
@@ -317,25 +491,14 @@ def save_cover_letter_local(cover_letter_text: str, filename: str) -> str:
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(cover_letter_text)
     
-    # Return relative path
     return str(Path("local_data") / "cover_letters" / filename)
 
 
 def delete_resume_local(resume_path: str):
-    """
-    Delete a resume file from local directory.
-    
-    Args:
-        resume_path: Path to the resume file (can be relative or absolute, or Google Drive URL)
-    """
+    """Delete a resume file from local directory."""
     if not resume_path:
         return
     
-    # If it's a Google Drive URL, skip (shouldn't happen in local mode, but be safe)
-    if 'drive.google.com' in resume_path:
-        return
-    
-    # Handle relative paths
     path_obj = Path(resume_path)
     if resume_path.startswith('./'):
         file_path = path_obj
@@ -353,17 +516,7 @@ def delete_resume_local(resume_path: str):
 
 
 def get_local_file_path(user_name: str, company_name: str, file_type: str = 'resume') -> str:
-    """
-    Generate a local file path based on job details.
-    
-    Args:
-        user_name: User's name (sanitized)
-        company_name: Company name (sanitized)
-        file_type: 'resume' or 'cover_letter'
-    
-    Returns:
-        Filename (not full path)
-    """
+    """Generate a local file path based on job details."""
     sanitized_user = user_name.replace(' ', '_')
     sanitized_company = company_name.replace(' ', '_')
     
