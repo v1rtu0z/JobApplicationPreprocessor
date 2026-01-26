@@ -1,8 +1,11 @@
 from datetime import datetime
 import os
-import time
 import random
 import re
+import subprocess
+import sys
+import time
+import webbrowser
 
 from api_methods import (
     get_resume_json, get_job_analysis, get_tailored_resume, get_tailored_cl,
@@ -36,6 +39,46 @@ email_address = os.getenv("EMAIL_ADDRESS")
 linkedin_password = os.getenv("LINKEDIN_PASSWORD")
 CHECK_SUSTAINABILITY = os.getenv("CHECK_SUSTAINABILITY", "false").lower() == "true"
 CRAWL_LINKEDIN = os.getenv("CRAWL_LINKEDIN", "false").lower() == "true"
+
+# Dashboard auto-open: Streamlit default port and delay before opening browser
+DASHBOARD_URL = "http://localhost:8501"
+DASHBOARD_LAUNCH_DELAY_SEC = 2.5
+
+
+def _has_jobs_to_show(sheet) -> bool:
+    """Return True if the sheet has at least one job (so the dashboard has something to show)."""
+    try:
+        rows = sheet.get_all_records()
+        return bool(rows) and any(row.get("Job Title") for row in rows)
+    except Exception:
+        return False
+
+
+def _launch_dashboard_once(sheet, launched_flag: dict) -> None:
+    """If there are jobs and the dashboard has not been launched yet, start Streamlit and open the browser."""
+    if launched_flag.get("launched"):
+        return
+    if not _has_jobs_to_show(sheet):
+        return
+    launched_flag["launched"] = True
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    dashboard_script = os.path.join(project_dir, "dashboard.py")
+    if not os.path.isfile(dashboard_script):
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "streamlit", "run", dashboard_script, "--server.headless", "true"],
+            cwd=project_dir,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        time.sleep(DASHBOARD_LAUNCH_DELAY_SEC)
+        webbrowser.open(DASHBOARD_URL)
+        print("\nDashboard opened in your browser. View and manage your job applications there.\n")
+    except Exception as e:
+        print(f"Could not auto-open dashboard: {e}. Run manually: streamlit run dashboard.py\n")
 
 
 # --- Main Loop ---
@@ -791,6 +834,21 @@ def analyze_all_jobs(sheet, resume_json, target_jobs=None):
     analyzed_count = 0
     consecutive_analysis_failure_count = 0
     skipped_reasons = {}
+    # One example job (company, title) per reason so users can see which bucket a job is in
+    skipped_example = {}
+
+    # Order of checks in the pipeline: expired first (can't fetch JD), then JD, then CO, then fit score, then sustainability
+    def _record_skip(reason, company_name, job_title, row_for_breakdown=None):
+        skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+        if reason not in skipped_example:
+            skipped_example[reason] = (company_name or "?", job_title or "?")
+        if row_for_breakdown is not None and reason == "Missing Job Description":
+            if row_for_breakdown.get('Job posting expired') == 'TRUE':
+                breakdown["missing_jd_also_expired"] = breakdown.get("missing_jd_also_expired", 0) + 1
+            if str(row_for_breakdown.get('Sustainable company', '')).strip().upper() == 'FALSE':
+                breakdown["missing_jd_unsustainable"] = breakdown.get("missing_jd_unsustainable", 0) + 1
+
+    breakdown = {}  # extra stats for Missing JD: also_expired, unsustainable
 
     for row in all_rows:
         if not row.get('Job Title'):
@@ -798,33 +856,35 @@ def analyze_all_jobs(sheet, resume_json, target_jobs=None):
 
         job_url = row.get('Job URL', '').strip()
         company_name = row.get('Company Name', '').strip()
-        
+        job_title = row.get('Job Title', '').strip()
+
         # If target_jobs is provided, skip if not in target
         if target_jobs is not None:
             if (job_url, company_name) not in target_jobs:
                 continue
 
-        # we skip jobs that are expired, filtered, or already analyzed
-        # If sustainability check is disabled, we don't skip based on the 'Sustainable company' column
+        # 1. Expired first: we can't fetch JD for expired jobs, so attribute skip to expired not missing JD
         if row.get('Job posting expired') == 'TRUE':
-            continue
-            
-        if not row.get('Job Description'):
-            reason = "Missing Job Description"
-            skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
-            continue
-            
-        if not row.get('Company overview'):
-            reason = "Missing Company overview"
-            skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
-            continue
-            
-        if row.get('Fit score'):
+            _record_skip("Job posting expired", company_name, job_title)
             continue
 
+        if not row.get('Job Description'):
+            _record_skip("Missing Job Description", company_name, job_title, row_for_breakdown=row)
+            continue
+
+        if not row.get('Company overview'):
+            _record_skip("Missing Company overview", company_name, job_title)
+            continue
+
+        fit_score_val = (row.get('Fit score') or '').strip()
+        if fit_score_val in ['Poor fit', 'Very poor fit', 'Moderate fit', 'Questionable fit']:
+            _record_skip("Already has non-good fit score (poor/moderate/questionable)", company_name, job_title)
+            continue
+        if fit_score_val in ['Good fit', 'Very good fit'] or fit_score_val:
+            continue  # already has good fit or other score; no need to re-analyze or count
+
         if CHECK_SUSTAINABILITY and row.get('Sustainable company', '').strip().upper() != 'TRUE':
-            reason = "Unsustainable or pending sustainability check"
-            skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+            _record_skip("Unsustainable or pending sustainability check", company_name, job_title)
             continue
 
         fit_score = analyze_single_job(sheet, row, resume_json)
@@ -838,10 +898,41 @@ def analyze_all_jobs(sheet, resume_json, target_jobs=None):
                     f"Skipping further analysis due to {consecutive_analysis_failure_count} consecutive analysis failures.")
                 break
 
+    # Report in pipeline order: downstream gates first, then earlier gates (expired last in report = checked first in pipeline)
+    REPORT_ORDER = [
+        "Unsustainable or pending sustainability check",
+        "Already has non-good fit score (poor/moderate/questionable)",
+        "Missing Company overview",
+        "Missing Job Description",
+        "Job posting expired",
+    ]
+
     if skipped_reasons:
-        print("Summary of skipped jobs in analysis:")
+        print("Summary of skipped jobs in analysis (downstream gates first; pipeline checks expired before JD):")
+        for reason in REPORT_ORDER:
+            count = skipped_reasons.get(reason, 0)
+            if count == 0:
+                continue
+            example = skipped_example.get(reason, (None, None))
+            line = f"  - {count} jobs skipped: {reason}"
+            if example[0] and example[1]:
+                line += f" (e.g. {example[0]} – {example[1]})"
+            if reason == "Missing Job Description" and (breakdown.get("missing_jd_also_expired") or breakdown.get("missing_jd_unsustainable")):
+                parts = []
+                if breakdown.get("missing_jd_also_expired"):
+                    parts.append(f"{breakdown['missing_jd_also_expired']} also marked expired (pipeline bug if >0)")
+                if breakdown.get("missing_jd_unsustainable"):
+                    parts.append(f"{breakdown['missing_jd_unsustainable']} have Sustainable=FALSE (would be skipped later anyway)")
+                if parts:
+                    line += "\n      " + "; ".join(parts)
+            print(line)
         for reason, count in skipped_reasons.items():
-            print(f"  - {count} jobs skipped: {reason}")
+            if reason not in REPORT_ORDER:
+                example = skipped_example.get(reason, (None, None))
+                if example[0] and example[1]:
+                    print(f"  - {count} jobs skipped: {reason} (e.g. {example[0]} – {example[1]})")
+                else:
+                    print(f"  - {count} jobs skipped: {reason}")
 
     print(f"\nAnalysis loop completed. Analyzed {analyzed_count} jobs.")
     return analyzed_count
@@ -1501,6 +1592,9 @@ def _run_processing_cycle(sheet, resume_json, company_overview_cache, shutdown_r
     
     # Final pass for all pending jobs
     print("\nFinal pass: Processing all pending jobs in the database...")
+    if CHECK_SUSTAINABILITY:
+        if validate_sustainability_for_unprocessed_jobs(sheet) > 0:
+            progress_made_in_cycle = True
     if analyze_all_jobs(sheet, resume_json) > 0:
         progress_made_in_cycle = True
     if process_resumes_and_cover_letters(sheet, resume_json) > 0:
@@ -1556,6 +1650,10 @@ def main():
     base_sleep_interval = 3600  # 1 hour
     current_sleep_interval = base_sleep_interval
     company_overview_cache = _build_company_overview_cache(sheet)
+    dashboard_launched = {"launched": False}
+
+    # Open dashboard as soon as there is something to see (e.g. jobs from a previous run)
+    _launch_dashboard_once(sheet, dashboard_launched)
 
     while not shutdown_requested['flag']:
         try:
@@ -1586,6 +1684,9 @@ def main():
                 
             if has_incomplete_jobs:
                 print(f"Found jobs with missing data. Processing immediately...")
+
+            # Open dashboard as soon as there is something to see (e.g. jobs added this run)
+            _launch_dashboard_once(sheet, dashboard_launched)
 
             print(f"\n{'=' * 60}")
             print(f"Starting new processing cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

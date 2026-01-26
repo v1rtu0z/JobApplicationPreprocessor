@@ -621,14 +621,15 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
     companies_to_check = []  # List of dicts for bulk API
     companies_seen = set()  # Track unique companies in this batch collection
 
-    # Phase 1: Collect unique companies that need checking
+    # Phase 1: Collect unique companies that need checking (only from rows we might still process)
+    # Only consider rows that are not applied, not expired, not bad analysis – we disregard those.
+    # Also skip rows that are already processed/filtered (have a fit score), so we only check
+    # companies that have at least one job still pending analysis.
     for row in all_rows:
-        # Skip if already processed or filtered out
-        if row.get('Fit score') in ['Poor fit', 'Very poor fit', 'Moderate fit', 'Questionable fit']:
+        if row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
             continue
 
-        if row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get(
-                'Job posting expired') == 'TRUE':
+        if row.get('Fit score') in ['Poor fit', 'Very poor fit', 'Moderate fit', 'Questionable fit']:
             continue
 
         # Skip if already has definitive sustainable company value
@@ -661,7 +662,8 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
         print("No companies need sustainability validation.")
         return 0
 
-    print(f"Found {len(companies_to_check)} companies to check for sustainability.")
+    names = [c['company_name'] for c in companies_to_check]
+    print(f"Found {len(companies_to_check)} companies to check for sustainability: {', '.join(names)}")
 
     # Phase 2: Process in batches
     # Note: This could be imported from main.py if made a shared constant

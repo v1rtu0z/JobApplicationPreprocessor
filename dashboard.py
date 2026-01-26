@@ -21,6 +21,12 @@ st.set_page_config(
 # Custom CSS for fixed undo popup
 st.markdown("""
 <style>
+    :root {
+        /* JS will keep these in sync with stMain */
+        --jab-main-left: 0px;
+        --jab-main-width: 100vw;
+    }
+
     /* 1. Target the specific vertical block for the undo popup */
     div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"]:has(.undo-marker-unique) {
         position: fixed !important;
@@ -81,6 +87,44 @@ st.markdown("""
         border-left-color: #ff4444 !important;
         background-color: #2d1f1f !important;
     }
+
+    /* Sticky bottom pagination bar */
+    div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"]:has(.pagination-marker-unique) {
+        position: fixed !important;
+        /* Keep aligned with stMain as sidebar opens/closes */
+        left: var(--jab-main-left) !important;
+        width: var(--jab-main-width) !important;
+        transition: left 140ms ease, width 140ms ease !important;
+        right: auto !important;
+        bottom: 0 !important;
+        z-index: 9999 !important;
+        background-color: rgba(26, 28, 36, 0.98) !important;
+        border-top: 1px solid #3d444d !important;
+        padding: 10px 16px !important;
+        box-shadow: 0 -8px 24px rgba(0,0,0,0.4) !important;
+    }
+
+    /* Add bottom space so pager doesn't cover content */
+    div[data-testid="stMain"] {
+        padding-bottom: 92px !important;
+    }
+
+    /* Compact pager typography */
+    .pager-text {
+        color: #c9d1d9 !important;
+        font-size: 0.9rem !important;
+        line-height: 1.2 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* Pager buttons: match existing dark theme */
+    div[data-testid="stVerticalBlock"]:has(.pagination-marker-unique) button {
+        background-color: #21262d !important;
+        border: 1px solid #3d444d !important;
+        color: #c9d1d9 !important;
+        padding: 0.35rem 0.6rem !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -89,6 +133,7 @@ if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
 
 AUTO_REFRESH_INTERVAL = 60  # seconds (increased from 30)
+PAGE_SIZE = 25  # Fixed page size for pagination
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour - user_name rarely changes
 def get_cached_user_name():
@@ -215,6 +260,65 @@ def handle_field_update(job_url_key: str, company_key: str, field_name: str, new
 
 def main():
     st.title("💼 Job Application Dashboard")
+
+    # Keep sticky pager aligned with stMain width even when the Streamlit sidebar expands/collapses.
+    # This uses a tiny JS snippet to update CSS variables on resize/layout changes.
+    st.components.v1.html(
+        """
+        <script>
+        (function() {
+          function updateVars() {
+            try {
+              const doc = window.parent && window.parent.document ? window.parent.document : document;
+              const root = doc.documentElement;
+              const main = doc.querySelector('[data-testid="stMain"]');
+              const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+
+              // Prefer stMain geometry when available.
+              if (main) {
+                const r = main.getBoundingClientRect();
+                root.style.setProperty('--jab-main-left', r.left + 'px');
+                root.style.setProperty('--jab-main-width', r.width + 'px');
+                return;
+              }
+
+              // Fallback: infer from sidebar (expanded/collapsed).
+              let sidebarWidth = 0;
+              if (sidebar) {
+                const expanded = sidebar.getAttribute('aria-expanded');
+                const sr = sidebar.getBoundingClientRect();
+                sidebarWidth = (expanded === 'false') ? 0 : sr.width;
+              }
+              root.style.setProperty('--jab-main-left', sidebarWidth + 'px');
+              root.style.setProperty('--jab-main-width', (window.innerWidth - sidebarWidth) + 'px');
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          updateVars();
+          window.addEventListener('resize', updateVars);
+
+          try {
+            const doc = window.parent && window.parent.document ? window.parent.document : document;
+            const main = doc.querySelector('[data-testid="stMain"]');
+            const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+            if ('ResizeObserver' in window) {
+              const ro = new ResizeObserver(updateVars);
+              if (main) ro.observe(main);
+              if (sidebar) ro.observe(sidebar);
+            }
+          } catch (e) {
+            // ignore
+          }
+
+          // Sidebar animations can change layout without resize; poll lightly.
+          setInterval(updateVars, 300);
+        })();
+        </script>
+        """,
+        height=0,
+    )
     
     # Initialize session state for data and UI
     if 'df' not in st.session_state:
@@ -230,6 +334,12 @@ def main():
         st.session_state.undo_stack = []  # Format: (job_key, field_name, old_value, job_url_key, company_key, company, job_title)
     if 'last_refresh' not in st.session_state:
         st.session_state.last_refresh = time.time()
+    if 'page_index' not in st.session_state:
+        st.session_state.page_index = 0  # 0-based
+    if 'page_jump' not in st.session_state:
+        st.session_state.page_jump = 1  # 1-based UI value
+    if 'pagination_context_hash' not in st.session_state:
+        st.session_state.pagination_context_hash = None
 
     def on_checkbox_change(job_key, field_name, job_url_key, company_key, company, job_title, current_val, filter_selection):
         # The new value is in session state
@@ -450,20 +560,18 @@ def main():
     else:
         selected_sustainable = []
     
-    # Company overview filter
-    if 'Company overview' in df.columns:
-        company_overview_options = ['Yes', 'No', 'Unknown']
-        selected_company_overview_raw = st.sidebar.multiselect("Has Company Overview", company_overview_options, default=[])
-        selected_company_overview = normalize_multiselect(selected_company_overview_raw)
-    else:
-        selected_company_overview = []
-    
-    # Missing data filter (high priority)
+    # Missing data filter: per-field presence or lack (Has / Missing for each)
     st.sidebar.divider()
-    st.sidebar.header("⚠️ Missing Data")
-    missing_data_options = ['Missing Job Description', 'Missing Company Overview', 'Missing Both', 'All Complete']
-    selected_missing_data_raw = st.sidebar.multiselect("Filter by Missing Data", missing_data_options, default=[])
-    selected_missing_data = normalize_multiselect(selected_missing_data_raw)
+    st.sidebar.header("⚠️ Data completeness")
+    jd_filter_options = ['Has', 'Missing']
+    selected_jd_data_raw = st.sidebar.multiselect("Job Description", jd_filter_options, default=[], key="jd_data_filter")
+    selected_jd_data = normalize_multiselect(selected_jd_data_raw)
+    if 'Company overview' in df.columns:
+        selected_co_data_raw = st.sidebar.multiselect("Company Overview", jd_filter_options, default=[], key="co_data_filter")
+        selected_co_data = normalize_multiselect(selected_co_data_raw)
+    else:
+        selected_co_data_raw = []
+        selected_co_data = []
     
     # Priority filter for sustainable jobs missing descriptions
     show_priority_only = st.sidebar.checkbox("🔴 Show only sustainable jobs missing descriptions", value=False)
@@ -569,30 +677,25 @@ def main():
             company_mask = df['Company Name'].isin(selected_company)
         filter_mask = filter_mask & company_mask
     
-    # Company overview filtering
-    if 'Company overview' in df.columns and selected_company_overview:
+    # Data completeness filtering: per-field Has / Missing (each field independent)
+    has_jd = df['Job Description'].notna() & (df['Job Description'] != '')
+    has_co = (df['Company overview'].notna() & (df['Company overview'] != '')) if 'Company overview' in df.columns else pd.Series([False] * len(df), index=df.index)
+
+    if selected_jd_data:
+        jd_mask = pd.Series([False] * len(df), index=df.index)
+        if 'Has' in selected_jd_data:
+            jd_mask = jd_mask | has_jd
+        if 'Missing' in selected_jd_data:
+            jd_mask = jd_mask | ~has_jd
+        filter_mask = filter_mask & jd_mask
+
+    if selected_co_data:
         co_mask = pd.Series([False] * len(df), index=df.index)
-        if 'Yes' in selected_company_overview:
-            co_mask = co_mask | (df['Company overview'].notna() & (df['Company overview'] != ''))
-        if 'No' in selected_company_overview or 'Unknown' in selected_company_overview:
-            co_mask = co_mask | (df['Company overview'].isna() | (df['Company overview'] == ''))
+        if 'Has' in selected_co_data:
+            co_mask = co_mask | has_co
+        if 'Missing' in selected_co_data:
+            co_mask = co_mask | ~has_co
         filter_mask = filter_mask & co_mask
-    
-    # Missing data filtering
-    if selected_missing_data:
-        has_jd = df['Job Description'].notna() & (df['Job Description'] != '')
-        has_co = df['Company overview'].notna() & (df['Company overview'] != '') if 'Company overview' in df.columns else pd.Series([False] * len(df), index=df.index)
-        
-        missing_mask = pd.Series([False] * len(df), index=df.index)
-        if 'Missing Job Description' in selected_missing_data:
-            missing_mask = missing_mask | ~has_jd
-        if 'Missing Company Overview' in selected_missing_data:
-            missing_mask = missing_mask | ~has_co
-        if 'Missing Both' in selected_missing_data:
-            missing_mask = missing_mask | (~has_jd & ~has_co)
-        if 'All Complete' in selected_missing_data:
-            missing_mask = missing_mask | (has_jd & has_co)
-        filter_mask = filter_mask & missing_mask
     
     # Priority filter: sustainable jobs missing descriptions
     if show_priority_only:
@@ -774,9 +877,45 @@ def main():
         job_key = f"{job_url_key}|{company_key}|{row_idx}"
         if job_key not in st.session_state.hidden_jobs:
             visible_jobs_list.append((row_idx, row))
-    
+
+    # Reset/clamp pagination when filters/sorting change
+    pagination_context = (
+        st.session_state.get('df_hash'),
+        tuple(selected_fit_scores_raw),
+        tuple(selected_applied_raw),
+        tuple(selected_resume_raw),
+        tuple(selected_cl_raw),
+        tuple(selected_expired_raw),
+        tuple(selected_bad_analysis_raw) if 'Bad analysis' in df.columns else (),
+        tuple(selected_sustainable_raw) if 'Sustainable company' in df.columns else (),
+        tuple(selected_jd_data_raw),
+        tuple(selected_co_data_raw) if 'Company overview' in df.columns else (),
+        bool(show_priority_only),
+        tuple(selected_locations_raw),
+        tuple(selected_company_raw),
+        sort_by_1, sort_order_1,
+        sort_by_2, sort_order_2,
+        sort_by_3, sort_order_3,
+        len(st.session_state.hidden_jobs),
+    )
+    current_context_hash = hash(pagination_context)
+    if st.session_state.pagination_context_hash != current_context_hash:
+        st.session_state.pagination_context_hash = current_context_hash
+        st.session_state.page_index = 0
+        st.session_state.page_jump = 1
+
+    # Pagination math (fixed page size)
+    total_items = len(visible_jobs_list)
+    total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
+    st.session_state.page_index = max(0, min(int(st.session_state.page_index), total_pages - 1))
+    st.session_state.page_jump = st.session_state.page_index + 1
+
+    start_idx = st.session_state.page_index * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, total_items)
+    paginated_jobs_list = visible_jobs_list[start_idx:end_idx]
+
     # Display jobs in expandable sections - using itertuples for performance
-    for display_idx, (original_row_idx, row) in enumerate(visible_jobs_list):
+    for display_idx, (original_row_idx, row) in enumerate(paginated_jobs_list):
         # Get unique identifier for this job
         job_url_key = get_row_value(row, 'Job URL', '')
         company_key = get_row_value(row, 'Company Name', '')
@@ -811,9 +950,8 @@ def main():
         has_company_overview = bool(company_overview.strip() if company_overview else False)
         missing_jd = not has_job_description
         
-        # Only show missing CO if fetching was attempted and failed
-        co_attempted = get_row_value(row, 'CO fetch attempted', '') == 'TRUE'
-        missing_co = not has_company_overview and co_attempted
+        # Show missing CO in collapsed overview when no company overview (CO fetch attempted used only for analytics elsewhere)
+        missing_co = not has_company_overview
         
         # Build expander title with more info
         title_parts = [f"{color} {company} - {job_title}"]
@@ -841,7 +979,9 @@ def main():
         if missing_co:
             title_parts.append("⚠️ Missing CO")
         
-        with st.expander(" | ".join(title_parts), expanded=False):
+        # Keep this row expanded after saving a field (session state set in Save button handlers)
+        expanded = job_key == st.session_state.get("expanded_job_row")
+        with st.expander(" | ".join(title_parts), expanded=expanded):
             # Basic info
             st.write(f"**Company:** {company}")
             st.write(f"**Job Title:** {job_title}")
@@ -891,20 +1031,36 @@ def main():
             st.subheader("📋 Job Description")
             if has_job_description:
                 with st.expander("View/Edit Job Description"):
-                    # Allow editing existing job description
-                    with st.form(key=f"edit_job_description_form_{job_key}"):
-                        current_jd = job_description if job_description else ''
-                        job_description_text = st.text_area(
-                            "Update Job Description",
-                            value=current_jd,
-                            key=f"edit_job_description_{job_key}",
-                            height=300
+                    current_jd = job_description if job_description else ''
+                    jd_key = f"job_description_{job_key}"
+                    jd_loaded_key = f"{jd_key}__loaded"
+                    if jd_key not in st.session_state:
+                        st.session_state[jd_key] = current_jd
+                        st.session_state[jd_loaded_key] = current_jd
+                    else:
+                        # If the underlying DB value changed (e.g. auto-refresh) and the user hasn't edited locally,
+                        # sync the widget value to the latest DB value.
+                        last_loaded = st.session_state.get(jd_loaded_key, current_jd)
+                        if st.session_state.get(jd_key, '') == last_loaded and current_jd != last_loaded:
+                            st.session_state[jd_key] = current_jd
+                        st.session_state[jd_loaded_key] = current_jd
+
+                    st.text_area(
+                        "Job Description",
+                        key=jd_key,
+                        height=300
+                    )
+                    if st.button("💾 Save Job Description", key=f"save_job_description_{job_key}"):
+                        st.session_state.expanded_job_row = job_key
+                        st.session_state.last_refresh = time.time()
+                        handle_field_update(
+                            job_url_key,
+                            company_key,
+                            'Job Description',
+                            st.session_state.get(jd_key, ''),
+                            current_jd,
+                            "✅ Job description saved!"
                         )
-                        if st.form_submit_button("💾 Update Job Description"):
-                            handle_field_update(
-                                job_url_key, company_key, 'Job Description', job_description_text, current_jd,
-                                "✅ Job description updated!"
-                            )
             else:
                 if sustainable == 'TRUE':
                     st.error("🚨 **CRITICAL: Missing Job Description** - This sustainable company job cannot be analyzed without a job description!")
@@ -912,59 +1068,103 @@ def main():
                     st.warning("⚠️ **Missing Job Description** - This job cannot be analyzed without a job description.")
                 
                 # Manual job description input
-                with st.form(key=f"job_description_form_{job_key}"):
-                    st.subheader("✏️ Add Job Description")
-                    current_jd = job_description if job_description else ''
-                    job_description_text = st.text_area(
-                        "Job Description",
-                        value=current_jd,
-                        key=f"job_description_{job_key}",
-                        height=300,
-                        help="Paste the job description from the LinkedIn job posting here"
+                st.subheader("✏️ Add Job Description")
+                current_jd = job_description if job_description else ''
+                jd_key = f"job_description_{job_key}"
+                jd_loaded_key = f"{jd_key}__loaded"
+                if jd_key not in st.session_state:
+                    st.session_state[jd_key] = current_jd
+                    st.session_state[jd_loaded_key] = current_jd
+                else:
+                    last_loaded = st.session_state.get(jd_loaded_key, current_jd)
+                    if st.session_state.get(jd_key, '') == last_loaded and current_jd != last_loaded:
+                        st.session_state[jd_key] = current_jd
+                    st.session_state[jd_loaded_key] = current_jd
+
+                st.text_area(
+                    "Job Description",
+                    key=jd_key,
+                    height=300,
+                    help="Paste the job description from the LinkedIn job posting here"
+                )
+                if st.button("💾 Save Job Description", key=f"save_job_description_missing_{job_key}"):
+                    st.session_state.expanded_job_row = job_key
+                    st.session_state.last_refresh = time.time()
+                    handle_field_update(
+                        job_url_key,
+                        company_key,
+                        'Job Description',
+                        st.session_state.get(jd_key, ''),
+                        current_jd,
+                        "✅ Job description saved! The job will be analyzed in the next cycle."
                     )
-                    if st.form_submit_button("💾 Save Job Description"):
-                        handle_field_update(
-                            job_url_key, company_key, 'Job Description', job_description_text, current_jd,
-                            "✅ Job description saved! The job will be analyzed in the next cycle."
-                        )
             
             # Company Overview section
             st.divider()
             st.subheader("🏢 Company Overview")
             if company_overview:
                 with st.expander("View/Edit Company Overview"):
-                    # Manual company overview update (inside expander)
-                    with st.form(key=f"company_overview_form_{job_key}"):
-                        current_co = company_overview
-                        company_overview_text = st.text_area(
-                            "Update Company Overview",
-                            value=current_co,
-                            key=f"company_overview_{job_key}",
-                            height=200
+                    current_co = company_overview
+                    co_key = f"company_overview_{job_key}"
+                    co_loaded_key = f"{co_key}__loaded"
+                    if co_key not in st.session_state:
+                        st.session_state[co_key] = current_co
+                        st.session_state[co_loaded_key] = current_co
+                    else:
+                        last_loaded = st.session_state.get(co_loaded_key, current_co)
+                        if st.session_state.get(co_key, '') == last_loaded and current_co != last_loaded:
+                            st.session_state[co_key] = current_co
+                        st.session_state[co_loaded_key] = current_co
+
+                    st.text_area(
+                        "Company Overview",
+                        key=co_key,
+                        height=200
+                    )
+                    if st.button("💾 Save Company Overview", key=f"save_company_overview_{job_key}"):
+                        st.session_state.expanded_job_row = job_key
+                        st.session_state.last_refresh = time.time()
+                        handle_field_update(
+                            job_url_key,
+                            company_key,
+                            'Company overview',
+                            st.session_state.get(co_key, ''),
+                            current_co,
+                            "✅ Company overview saved!"
                         )
-                        if st.form_submit_button("💾 Update Company Overview"):
-                            handle_field_update(
-                                job_url_key, company_key, 'Company overview', company_overview_text, current_co,
-                                "✅ Company overview updated!"
-                            )
             else:
                 st.warning("⚠️ **Missing Company Overview** - Company overview is needed for sustainability checks and better analysis.")
                 # Manual company overview input
-                with st.form(key=f"company_overview_missing_form_{job_key}"):
-                    st.subheader("✏️ Add Company Overview")
-                    current_co = company_overview
-                    company_overview_text = st.text_area(
-                        "Company Overview",
-                        value=current_co,
-                        key=f"company_overview_missing_{job_key}",
-                        height=200,
-                        help="Paste the company overview/description here"
+                st.subheader("✏️ Add Company Overview")
+                current_co = company_overview
+                co_key = f"company_overview_{job_key}"
+                co_loaded_key = f"{co_key}__loaded"
+                if co_key not in st.session_state:
+                    st.session_state[co_key] = current_co
+                    st.session_state[co_loaded_key] = current_co
+                else:
+                    last_loaded = st.session_state.get(co_loaded_key, current_co)
+                    if st.session_state.get(co_key, '') == last_loaded and current_co != last_loaded:
+                        st.session_state[co_key] = current_co
+                    st.session_state[co_loaded_key] = current_co
+
+                st.text_area(
+                    "Company Overview",
+                    key=co_key,
+                    height=200,
+                    help="Paste the company overview/description here"
+                )
+                if st.button("💾 Save Company Overview", key=f"save_company_overview_missing_{job_key}"):
+                    st.session_state.expanded_job_row = job_key
+                    st.session_state.last_refresh = time.time()
+                    handle_field_update(
+                        job_url_key,
+                        company_key,
+                        'Company overview',
+                        st.session_state.get(co_key, ''),
+                        current_co,
+                        "✅ Company overview saved!"
                     )
-                    if st.form_submit_button("💾 Save Company Overview"):
-                        handle_field_update(
-                            job_url_key, company_key, 'Company overview', company_overview_text, current_co,
-                            "✅ Company overview saved!"
-                        )
             
             # Resume section with inline feedback - lazy load PDF preview
             if resume_url:
@@ -1037,18 +1237,33 @@ def main():
                     
                     # Resume feedback inline
                     current_resume_feedback = get_row_value(row, 'Resume feedback', '')
-                    with st.form(key=f"resume_feedback_form_{job_key}"):
-                        resume_feedback_text = st.text_area(
-                            "Resume Feedback",
-                            value=current_resume_feedback,
-                            key=f"resume_feedback_{job_key}",
-                            height=100
+                    rf_key = f"resume_feedback_{job_key}"
+                    rf_loaded_key = f"{rf_key}__loaded"
+                    if rf_key not in st.session_state:
+                        st.session_state[rf_key] = current_resume_feedback
+                        st.session_state[rf_loaded_key] = current_resume_feedback
+                    else:
+                        last_loaded = st.session_state.get(rf_loaded_key, current_resume_feedback)
+                        if st.session_state.get(rf_key, '') == last_loaded and current_resume_feedback != last_loaded:
+                            st.session_state[rf_key] = current_resume_feedback
+                        st.session_state[rf_loaded_key] = current_resume_feedback
+
+                    st.text_area(
+                        "Resume Feedback",
+                        key=rf_key,
+                        height=100
+                    )
+                    if st.button("💾 Save Resume Feedback", key=f"save_resume_feedback_{job_key}"):
+                        st.session_state.expanded_job_row = job_key
+                        st.session_state.last_refresh = time.time()
+                        handle_field_update(
+                            job_url_key,
+                            company_key,
+                            'Resume feedback',
+                            st.session_state.get(rf_key, ''),
+                            current_resume_feedback,
+                            "✅ Resume feedback saved"
                         )
-                        if st.form_submit_button("💾 Save Resume Feedback"):
-                            handle_field_update(
-                                job_url_key, company_key, 'Resume feedback', resume_feedback_text, current_resume_feedback,
-                                "✅ Resume feedback saved"
-                            )
                 else:
                     st.warning(f"Resume file not found at: {resume_url}")
                     if resume_path:
@@ -1061,20 +1276,81 @@ def main():
                 with st.expander("View/Edit Cover Letter"):
                     # CL feedback inline
                     current_cl_feedback = get_row_value(row, 'CL feedback', '')
-                    with st.form(key=f"cl_feedback_form_{job_key}"):
-                        st.text_area("Current Cover Letter", value=cover_letter, height=400, key=f"cl_view_{job_key}", disabled=True)
-                        
-                        cl_feedback_text = st.text_area(
-                            "Cover Letter Feedback",
-                            value=current_cl_feedback,
-                            key=f"cl_feedback_{job_key}",
-                            height=100
+                    st.text_area("Current Cover Letter", value=cover_letter, height=400, key=f"cl_view_{job_key}", disabled=True)
+
+                    cf_key = f"cl_feedback_{job_key}"
+                    cf_loaded_key = f"{cf_key}__loaded"
+                    if cf_key not in st.session_state:
+                        st.session_state[cf_key] = current_cl_feedback
+                        st.session_state[cf_loaded_key] = current_cl_feedback
+                    else:
+                        last_loaded = st.session_state.get(cf_loaded_key, current_cl_feedback)
+                        if st.session_state.get(cf_key, '') == last_loaded and current_cl_feedback != last_loaded:
+                            st.session_state[cf_key] = current_cl_feedback
+                        st.session_state[cf_loaded_key] = current_cl_feedback
+
+                    st.text_area(
+                        "Cover Letter Feedback",
+                        key=cf_key,
+                        height=100
+                    )
+                    if st.button("💾 Save CL Feedback", key=f"save_cl_feedback_{job_key}"):
+                        st.session_state.expanded_job_row = job_key
+                        st.session_state.last_refresh = time.time()
+                        handle_field_update(
+                            job_url_key,
+                            company_key,
+                            'CL feedback',
+                            st.session_state.get(cf_key, ''),
+                            current_cl_feedback,
+                            "✅ Cover letter feedback saved"
                         )
-                        if st.form_submit_button("💾 Save CL Feedback"):
-                            handle_field_update(
-                                job_url_key, company_key, 'CL feedback', cl_feedback_text, current_cl_feedback,
-                                "✅ Cover letter feedback saved"
-                            )
+
+    # Sticky pagination controls (bottom bar)
+    if total_items > 0:
+        def _go_prev():
+            st.session_state.page_index = max(0, st.session_state.page_index - 1)
+            st.session_state.page_jump = st.session_state.page_index + 1
+
+        def _go_next():
+            st.session_state.page_index = min(total_pages - 1, st.session_state.page_index + 1)
+            st.session_state.page_jump = st.session_state.page_index + 1
+
+        def _on_page_jump_change():
+            try:
+                desired = int(st.session_state.page_jump)
+            except Exception:
+                desired = 1
+            desired = max(1, min(desired, total_pages))
+            st.session_state.page_index = desired - 1
+            st.session_state.page_jump = desired
+
+        with st.container():
+            st.markdown('<div class="pagination-marker-unique"></div>', unsafe_allow_html=True)
+            pager_cols = st.columns([1.1, 3.8, 1.1])
+            with pager_cols[0]:
+                st.button("◀ Prev", key="pager_prev", on_click=_go_prev, disabled=(st.session_state.page_index <= 0), use_container_width=True)
+            with pager_cols[1]:
+                mid_cols = st.columns([3.4, 0.6])
+                with mid_cols[0]:
+                    st.markdown(
+                        f'<p class="pager-text">Page <b>{st.session_state.page_index + 1}</b> / <b>{total_pages}</b>'
+                        f' · Showing <b>{start_idx + 1}</b>-<b>{end_idx}</b> of <b>{total_items}</b></p>',
+                        unsafe_allow_html=True
+                    )
+                with mid_cols[1]:
+                    st.number_input(
+                        "Page",
+                        min_value=1,
+                        max_value=total_pages,
+                        step=1,
+                        key="page_jump",
+                        on_change=_on_page_jump_change,
+                        label_visibility="collapsed",
+                        format="%d",
+                    )
+            with pager_cols[2]:
+                st.button("Next ▶", key="pager_next", on_click=_go_next, disabled=(st.session_state.page_index >= total_pages - 1), use_container_width=True)
     
     # Fixed Undo popup in bottom right
     if st.session_state.undo_stack:
