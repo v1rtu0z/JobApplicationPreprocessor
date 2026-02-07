@@ -251,48 +251,12 @@ You must respond with ONLY a JSON object in this exact format:
         return None
 
 
-def mark_insufficient_overview_as_unsustainable(sheet, verbose: bool = True) -> int:
-    """Mark all jobs with missing or very short company overview as unsustainable (FALSE).
-    Returns the number of jobs updated. Use to fix dashboard default filter: such jobs
-    otherwise stay Unknown and incorrectly appear when filtering for sustainable/unknown."""
-    all_rows = sheet.get_all_records()
-    insufficient_overview_updates = []
-    for row in all_rows:
-        sustainable_value = str(row.get('Sustainable company', '')).strip().upper()
-        if sustainable_value in ['TRUE', 'FALSE']:
-            continue
-        company_overview = (row.get('Company overview') or '').strip()
-        if company_overview:
-            continue
-        job_url = (row.get('Job URL') or '').strip()
-        company_name = (row.get('Company Name') or '').strip()
-        if not job_url or not company_name:
-            continue
-        updates = {
-            'Sustainable company': 'FALSE',
-        }
-        if not row.get('Fit score'):
-            updates['Fit score'] = 'Very poor fit'
-            updates['Fit score enum'] = str(fit_score_to_enum('Very poor fit'))
-            updates['Job analysis'] = 'Insufficient company overview (cannot evaluate sustainability)'
-        insufficient_overview_updates.append((job_url, company_name, updates))
-    if insufficient_overview_updates:
-        if verbose:
-            print(f"Marking {len(insufficient_overview_updates)} job(s) with missing/short company overview as unsustainable.")
-        sheet.bulk_update_by_key(insufficient_overview_updates)
-    return len(insufficient_overview_updates)
-
-
 def validate_sustainability_for_unprocessed_jobs(sheet):
-    """Process sustainability checks for jobs that have overview but no definitive Sustainable value.
-    First pass: mark jobs with missing or insufficient company overview as unsustainable (FALSE)
-    so they are excluded by the default dashboard filter (Yes + Unknown). Otherwise they stay
-    Unknown and incorrectly appear in the default view."""
+    """Process sustainability checks for jobs that have overview but no definitive Sustainable value."""
     print("\n" + "=" * 60)
     print("SUSTAINABILITY VALIDATION: Checking unprocessed companies")
     print("=" * 60 + "\n")
 
-    mark_insufficient_overview_as_unsustainable(sheet, verbose=True)
     all_rows = sheet.get_all_records()
     companies_to_check = []
     companies_seen = set()
