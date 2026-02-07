@@ -1,5 +1,7 @@
+flask
 requests
 python-dotenv
+beautifulsoup4
 google-genai
 html2text
 apify-client

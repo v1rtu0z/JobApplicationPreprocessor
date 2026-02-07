@@ -2,6 +2,7 @@
 /resume_data.json
 /additional_details.txt
 /.idea
-/__pycache__
+__pycache__
 /local_data
 job_preferences.yaml
+.vscode

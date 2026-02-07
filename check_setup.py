@@ -38,7 +38,7 @@ def check_setup():
     if os.path.exists('.env'):
         print("  ✅ .env file found")
         load_dotenv()
-        required_vars = ['EMAIL_ADDRESS', 'GEMINI_API_KEY', 'APIFY_API_TOKEN', 'SERVER_URL']
+        required_vars = ['EMAIL_ADDRESS', 'GEMINI_API_KEY', 'APIFY_API_TOKEN', 'SERVER_URL', 'API_KEY']
         for var in required_vars:
             if os.getenv(var):
                 print(f"  ✅ {var} is set")
@@ -46,6 +46,7 @@ def check_setup():
                 print(f"  ❌ {var} is MISSING in .env")
     else:
         print("  ❌ .env file NOT FOUND")
+        print("  💡 Or run the app (python main.py) to open the setup page and enter your configuration in the browser.")
 
     # 4. Check Local Storage Directory
     print("\n💾 Checking Local Storage:")

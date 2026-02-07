@@ -1,29 +1,20 @@
-import sqlite3
-import re
 import sys
-import os
 import time
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Add project root to path
-sys.path.append(os.getcwd())
+# Add project root to path so imports work when run from any cwd
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from utils import SHEET_HEADER, fetch_job_details_bulk_via_apify, normalize_company_name, match_job_to_apify_result
+from utils import (
+    SHEET_HEADER,
+    extract_job_id,
+    fetch_job_details_bulk_via_apify,
+    normalize_company_name,
+    match_job_to_apify_result,
+)
 from local_storage import JobDatabase
 
-def extract_job_id(url):
-    """Extract numerical job ID from LinkedIn URL"""
-    if not url:
-        return None
-    match = re.search(r'view/(\d+)', url)
-    if match:
-        return match.group(1)
-    # Fallback for other potential formats
-    match = re.search(r'currentJobId=(\d+)', url)
-    if match:
-        return match.group(1)
-    return None
 
 def verify_apify_connectivity():
     """Initial verification test to confirm Apify works"""
@@ -88,7 +79,7 @@ def run_migration():
     print(f"Found {len(jobs_to_process)} jobs missing descriptions.")
     
     # Process in batches
-    # Note: Import from main.py if this becomes a shared constant
+    # Note: Import from pipeline.constants if this becomes a shared constant
     batch_size = 100  # Number of job descriptions to fetch per batch
     total_updated = 0
     
@@ -124,7 +115,8 @@ def run_migration():
             if match:
                 # Update DB
                 updates = {'Job Description': desc, 'CO fetch attempted': 'TRUE'}
-                co_desc = comp_info.get('description', '')
+                company_info = item.get('company_info', {})
+                co_desc = company_info.get('description', '')
                 if co_desc:
                     updates['Company overview'] = co_desc
                 

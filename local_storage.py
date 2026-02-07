@@ -1,7 +1,7 @@
 import re
 import sqlite3
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 
 class JobDatabase:
@@ -12,7 +12,7 @@ class JobDatabase:
     SQLite connections are created with check_same_thread=False for compatibility.
     """
     
-    def __init__(self, db_path: str, columns: List[str]):
+    def __init__(self, db_path: str, columns: list[str]):
         """
         Initialize the job database.
         
@@ -84,7 +84,7 @@ class JobDatabase:
         cursor.execute(f"INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_backup")
         cursor.execute("DROP TABLE jobs_backup")
     
-    def get_all_jobs(self) -> List[Dict[str, str]]:
+    def get_all_jobs(self) -> list[dict[str, str]]:
         """Get all jobs as a list of dictionaries."""
         conn = self._get_connection()
         try:
@@ -113,7 +113,7 @@ class JobDatabase:
         finally:
             conn.close()
     
-    def add_jobs(self, jobs: List[Dict[str, str]]):
+    def add_jobs(self, jobs: list[dict[str, str]]):
         """
         Add multiple jobs to the database.
         
@@ -137,7 +137,7 @@ class JobDatabase:
         conn.commit()
         conn.close()
     
-    def add_jobs_from_rows(self, rows: List[List[str]]):
+    def add_jobs_from_rows(self, rows: list[list[str]]):
         """
         Add multiple jobs from row data (list of values matching column order).
         
@@ -164,7 +164,7 @@ class JobDatabase:
         conn.commit()
         conn.close()
     
-    def update_job(self, job_id: int, updates: Dict[str, str]):
+    def update_job(self, job_id: int, updates: dict[str, str]):
         """
         Update a single job by its ID.
         
@@ -185,7 +185,7 @@ class JobDatabase:
         finally:
             conn.close()
     
-    def update_job_by_key(self, job_url: str, company: str, updates: Dict[str, str]) -> int:
+    def update_job_by_key(self, job_url: str, company: str, updates: dict[str, str]) -> int:
         """
         Update a job by its URL and company name.
         
@@ -215,7 +215,7 @@ class JobDatabase:
         finally:
             conn.close()
     
-    def bulk_update(self, updates: List[tuple]):
+    def bulk_update(self, updates: list[tuple]):
         """
         Update multiple jobs efficiently.
         
@@ -237,7 +237,7 @@ class JobDatabase:
         conn.commit()
         conn.close()
     
-    def bulk_update_by_key(self, updates: List[tuple]):
+    def bulk_update_by_key(self, updates: list[tuple]):
         """
         Update multiple jobs efficiently using job URL and company name.
         
@@ -262,7 +262,7 @@ class JobDatabase:
         conn.commit()
         conn.close()
     
-    def sort_by(self, sort_specs: List[tuple]):
+    def sort_by(self, sort_specs: list[tuple]):
         """
         Sort jobs by specified columns.
         
@@ -309,21 +309,21 @@ class JobDatabase:
     # =========================================================================
     
     @property
-    def header(self) -> List[str]:
+    def header(self) -> list[str]:
         """Legacy: Return column names (for compatibility)."""
         return self.columns
     
-    def get_all_records(self) -> List[Dict[str, str]]:
+    def get_all_records(self) -> list[dict[str, str]]:
         """Legacy: Alias for get_all_jobs() without _id field."""
         jobs = self.get_all_jobs()
         # Remove internal _id from results
         return [{k: v for k, v in job.items() if k != '_id'} for job in jobs]
     
-    def append_rows(self, rows: List[List[str]]):
+    def append_rows(self, rows: list[list[str]]):
         """Legacy: Alias for add_jobs_from_rows()."""
         self.add_jobs_from_rows(rows)
     
-    def get_all_values(self) -> List[List[str]]:
+    def get_all_values(self) -> list[list[str]]:
         """Legacy: Get all rows as list of lists including header."""
         jobs = self.get_all_records()
         result = [self.columns]
@@ -331,7 +331,7 @@ class JobDatabase:
             result.append([job.get(col, '') for col in self.columns])
         return result
     
-    def row_values(self, row: int) -> List[str]:
+    def row_values(self, row: int) -> list[str]:
         """Legacy: Get values from a specific row (1-indexed, row 1 = header)."""
         if row == 1:
             return self.columns
@@ -364,7 +364,7 @@ class JobDatabase:
         col_name = self.columns[col - 1]
         self.update_job(job_id, {col_name: value})
     
-    def update_record_by_fields(self, filter_dict: Dict[str, str], update_dict: Dict[str, str]) -> int:
+    def update_record_by_fields(self, filter_dict: dict[str, str], update_dict: dict[str, str]) -> int:
         """Legacy: Update records matching filter criteria."""
         if not filter_dict or not update_dict:
             return 0
@@ -383,7 +383,7 @@ class JobDatabase:
         finally:
             conn.close()
     
-    def batch_update(self, updates: List[Dict[str, Any]], value_input_option: Optional[str] = None):
+    def batch_update(self, updates: list[dict[str, Any]], value_input_option: str | None = None):
         """
         Legacy: Batch update with A1 notation (for compatibility).
         

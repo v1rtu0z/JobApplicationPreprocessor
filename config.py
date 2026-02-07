@@ -76,20 +76,28 @@ def _get_job_filters():
     }
 
     if os.path.exists(filter_path):
-        with open(filter_path, 'r') as f:
-            try:
-                filters = yaml.safe_load(f)
-                if filters:
-                    # Merge with defaults to ensure all keys exist
-                    for key, value in default_filters.items():
-                        if key not in filters:
-                            filters[key] = value
-                    # Deduplicate before returning
-                    filters = _deduplicate_filters(filters)
-                    return filters
-            except Exception as e:
-                print(f"Error loading {CONFIG_FILE}: {e}")
-    
+        try:
+            with open(filter_path, 'r') as f:
+                content = f.read()
+            filters = yaml.safe_load(content)
+            if filters and isinstance(filters, dict):
+                # Merge with defaults to ensure all keys exist
+                for key, value in default_filters.items():
+                    if key not in filters:
+                        filters[key] = value
+                # Deduplicate before returning
+                filters = _deduplicate_filters(filters)
+                return filters
+        except yaml.YAMLError as e:
+            print(f"Error parsing {CONFIG_FILE} (invalid YAML): {e}")
+            return default_filters
+        except OSError as e:
+            print(f"Error reading {CONFIG_FILE}: {e}")
+            return default_filters
+        except Exception as e:
+            print(f"Error loading {CONFIG_FILE}: {e}")
+            return default_filters
+
     return default_filters
 
 

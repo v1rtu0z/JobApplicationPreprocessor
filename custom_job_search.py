@@ -1,5 +1,4 @@
 from linkedin_scraper import JobSearch, Job
-from typing import List
 from time import sleep
 
 from selenium.webdriver.common.by import By
@@ -29,7 +28,7 @@ class CustomJobSearch(JobSearch):
                 break
             last_height = new_height
 
-    def scrape_from_url(self, url: str) -> List:
+    def scrape_from_url(self, url: str) -> list:
         """
         Navigate to a LinkedIn jobs URL and scrape all visible job listings
 

@@ -171,7 +171,8 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
     # All keys exhausted (either rate limited or network errors)
     print("CRITICAL: All Gemini API keys exhausted (rate limited or network errors).")
     print("Skipping this operation. The app will continue but some steps may be skipped.")
-    return None
+    # Raise a specific exception so callers can detect rate limit situations
+    raise Exception("Rate limit: All Gemini API keys exhausted")
 
 
 def create_resume_json_from_pdf(pdf_path: str) -> dict:
@@ -366,9 +367,10 @@ def get_job_analysis(resume_json, job_details: dict) -> str:
         return data['job_analysis']
 
     except Exception as e:
-        # Check if it's a rate limit error (non-critical)
-        if "Rate limit exceeded" in str(e):
-            raise Exception("Rate limit exceeded - 429 error")
+        # Check if it's a rate limit error (non-critical, should trigger short wait)
+        error_str = str(e)
+        if "Rate limit" in error_str or "429" in error_str:
+            raise Exception("Rate limit exceeded - Gemini API 429")
         # All other errors are critical
         print(f"Critical error analyzing job: {e}")
         raise
