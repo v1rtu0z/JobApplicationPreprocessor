@@ -247,14 +247,15 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
             if i + COMPANY_OVERVIEW_BATCH_SIZE < len(company_names_ordered):
                 time.sleep(random.uniform(2, 4))
 
-    # Companies still missing CO (Apify unavailable or did not return for them)
+    # Companies still missing CO (Apify didn't return for them or we didn't try Apify)
     remaining_after_apify = [
         c for c in company_names_ordered
         if normalize_company_name(c) not in company_overview_cache
     ]
 
-    # 2) LinkedIn crawl as backup for remaining (Apify unavailable or failed for those)
-    if remaining_after_apify:
+    # 2) LinkedIn crawl only when Apify usage is exhausted (backup of last resort)
+    if remaining_after_apify and not utils.apify_state.is_available():
+        print("Apify unavailable (usage exhausted). Using LinkedIn crawl for remaining company overviews.")
         crawl_successful, crawl_failed = fetch_company_overviews_via_crawling(
             remaining_after_apify, headless=True, min_delay=12.0, max_delay=20.0
         )
