@@ -12,7 +12,7 @@ from utils import (
 )
 
 from .constants import CRAWL_LINKEDIN, email_address, linkedin_password
-from .filtering import _check_and_process_filters
+from .filtering import check_and_process_filters
 from .resumes import delete_resume_local
 
 
@@ -148,21 +148,14 @@ def validate_jobs_and_fetch_missing_data(driver, sheet):
             company_overview = row.get('Company overview', '')
             job_description = row.get('Job Description', '')
 
-            fit_score_result, fit_score_enum, analysis_reason, _, bulk_filtered = _check_and_process_filters(
+            result = check_and_process_filters(
                 job_title, company_name, raw_location, company_overview, job_description, sheet=sheet
             )
-
-            if fit_score_result:
-                updates = {
-                    'Fit score': fit_score_result,
-                    'Fit score enum': str(fit_score_enum),
-                    'Job analysis': analysis_reason,
-                    'Bulk filtered': bulk_filtered
-                }
-                sheet.update_job_by_key(job_url, company_name, updates)
-                print(f"  - Filtered job: {analysis_reason}")
-
-            sheet.update_job_by_key(job_url, company_name, {'Last expiration check': datetime.now().isoformat()})
+            last_check = datetime.now().isoformat()
+            updates = result.row_updates(last_check)
+            sheet.update_job_by_key(job_url, company_name, updates)
+            if result.filtered:
+                print(f"  - Filtered job: {result.analysis_reason}")
 
         if needs_jd or needs_location:
             print(f"Fetching missing data for: {row.get('Job Title')} @ {company_name}")

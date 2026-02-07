@@ -726,6 +726,10 @@ def render_jobs_view() -> None:
                         selected_sustainable,
                     ),
                 )
+            if check_sustainability_enabled and "Sustainability keyword matches" in df.columns:
+                sust_kw = _get(row, "Sustainability keyword matches", "").strip()
+                if sust_kw:
+                    st.write(f"**Sustainability keyword matches:** {sust_kw}")
             st.divider()
             if job_analysis:
                 analysis_col1, analysis_col2 = st.columns([3, 1])

@@ -15,6 +15,7 @@ from core import ApifyDataSource, LinkedInDataSource
 from .constants import CHECK_SUSTAINABILITY, email_address, linkedin_password
 from .filtering import (
     _apply_keyword_filters,
+    _apply_sustainability_keyword_filters,
     _normalize_job_title,
     _build_company_overview_cache,
 )
@@ -36,11 +37,16 @@ def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None
     should_skip, _ = _apply_keyword_filters(job_title, company_name, raw_location, filters)
     if should_skip:
         return None
+    should_skip_sust, _, _ = _apply_sustainability_keyword_filters(
+        job_title, company_name, raw_location, '', filters
+    )
+    if should_skip_sust:
+        return None
     clean_location = parse_location(raw_location) if raw_location else ""
     location_priority = get_location_priority(clean_location)
     row_data = [
         company_name, job_title, clean_location, str(location_priority),
-        job_description, job_url, "", "", "", "FALSE", "FALSE",
+        job_description, job_url, "", "", "", "", "FALSE", "FALSE",
         "", "", "FALSE", "",
     ]
     while len(row_data) < len(SHEET_HEADER):

@@ -3,8 +3,10 @@
 import utils
 from utils import parse_fit_score, fit_score_to_enum, html_to_markdown
 from api_methods import get_job_analysis
+from config import _get_job_filters
 
 from .constants import CHECK_SUSTAINABILITY
+from .filtering import get_sustainability_keyword_matches
 from .resumes import process_cover_letter, process_resume
 
 
@@ -31,10 +33,15 @@ def analyze_single_job(sheet, row, resume_json) -> str | None:
         job_analysis = get_job_analysis(resume_json, job_details)
         fit_score = parse_fit_score(job_analysis)
 
+        filters = _get_job_filters()
+        _, _, sust_matches = get_sustainability_keyword_matches(
+            job_title, company_name, row.get('Location') or '', row.get('Company overview') or '', filters
+        )
         updates = {
             'Fit score': fit_score,
             'Fit score enum': str(fit_score_to_enum(fit_score)),
-            'Job analysis': html_to_markdown(job_analysis)
+            'Job analysis': html_to_markdown(job_analysis),
+            'Sustainability keyword matches': sust_matches or '',
         }
         if row.get('Bad analysis', '').strip() == 'TRUE':
             updates['Bad analysis'] = 'FALSE'

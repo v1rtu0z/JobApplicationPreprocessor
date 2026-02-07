@@ -50,8 +50,10 @@ location_priorities:
 # -----------------------------------------------------------------------------
 # Sustainability Criteria (Optional)
 # -----------------------------------------------------------------------------
-# Used only if CHECK_SUSTAINABILITY=true in your .env file.
-# These lists help the LLM determine if a company is "sustainable".
+# Used for keyword-based filtering (negative = skip job) and, when
+# CHECK_SUSTAINABILITY=true, for the LLM sustainability check.
+# Positive/negative are substring-matched (case-insensitive) in title, company,
+# location, and optionally company overview (see use_company_overview below).
 sustainability_criteria:
   positive:
     - Renewable energy, clean tech, environmental protection
@@ -64,6 +66,8 @@ sustainability_criteria:
     - Gambling, casinos, betting
     - Predatory lending, payday loans
     - Harmful addictions or exploitative industries
+  # When true, negative/positive keyword check also uses Company overview text.
+  use_company_overview_for_sustainability_keywords: true
 
 # -----------------------------------------------------------------------------
 # General Settings

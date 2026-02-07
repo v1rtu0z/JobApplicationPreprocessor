@@ -6,18 +6,11 @@ Prioritized backlog. Completed items are moved to "Recently completed" below.
 
 ## 🟡 Medium Priority
 
-### 1. Keyword Search Improvements with Sustainability
-
-Integrate sustainability into keyword filtering: weighted positive keywords, negative keywords for unsustainable industries, optional use of company overview.
-
-- Sustainability keyword lists in filtering (e.g. extend pipeline/filtering or equivalent)
-- Config in `job_preferences.yaml`; dashboard display of sustainability keyword matches
-
-### 2. "Add to Startup" Facilitation
+### 1. "Add to Startup" Facilitation
 
 Make it easy to add the app to system startup: script that detects OS and creates the right entry (Windows Startup folder / registry, macOS LaunchAgent, Linux `~/.config/autostart` or systemd user service). Optional UI toggle in setup/dashboard; doc for manual fallback.
 
-### 3. Dashboard: Hide Filters on Activity View
+### 2. Dashboard: Hide Filters on Activity View
 
 When navigating Jobs → Activity, the Jobs sidebar filters (and stats) should not appear on the Activity page. Currently they persist or fade/reactivate in a loop. Settings does not show filters (correct). Fix so Activity behaves like Settings: filters hidden on Activity. Avoid breaking the Jobs UI (no container/placeholder approach that broke layout).
 
@@ -25,15 +18,15 @@ When navigating Jobs → Activity, the Jobs sidebar filters (and stats) should n
 
 ## 🟢 Low Priority
 
-### 4. Application Name and Branding
+### 3. Application Name and Branding
 
 Choose a memorable name; update README, docs, UI; optionally rename repo and add logo/favicon.
 
-### 5. Dockerization
+### 4. Dockerization
 
 Dockerfile (multi-stage), docker-compose, volume for `local_data/`, env handling. Document run and deploy.
 
-### 6. Build Process for Windows / macOS / Linux
+### 5. Build Process for Windows / macOS / Linux
 
 Build executables (e.g. PyInstaller) and installers per OS; GitHub Actions for builds; document release and, if needed, code signing.
 
@@ -41,6 +34,7 @@ Build executables (e.g. PyInstaller) and installers per OS; GitHub Actions for b
 
 ## Recently completed
 
+- **Keyword search improvements with sustainability** – Sustainability keyword lists in filtering: negative keywords (substring match in title, company, location, optional company overview) mark jobs as Very poor fit and skip at collection; positive matches stored for display. Config: `sustainability_criteria.positive`, `negative`, and `use_company_overview_for_sustainability_keywords` in `job_preferences.yaml`; new column "Sustainability keyword matches"; dashboard shows matches in job details when CHECK_SUSTAINABILITY is on.
 - **Settings page** – Dashboard Settings with .env, Keywords, Locations, Sustainability, Search params, General, Import/Export, Reset
 - **Additional details field** – Setup + Settings + use in `api_methods.py` prompts
 - **Sustainability warning** – Helper text in Dashboard Settings and setup page advising caution when prioritizing financial stability

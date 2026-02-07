@@ -24,7 +24,7 @@ def _default_job_filters() -> dict:
         "company_skip_keywords": [],
         "location_skip_keywords": [],
         "location_priorities": {},
-        "sustainability_criteria": {"positive": [], "negative": []},
+        "sustainability_criteria": {"positive": [], "negative": [], "use_company_overview_for_sustainability_keywords": True},
         "general_settings": {"resume_theme": "engineeringclassic"},
         "search_parameters": [],
         "auto_filter_adjustment": {"enabled": False, "good_fit_threshold": 5},
@@ -43,6 +43,7 @@ def _merge_with_defaults(filters: dict) -> dict:
     else:
         filters["sustainability_criteria"].setdefault("positive", [])
         filters["sustainability_criteria"].setdefault("negative", [])
+        filters["sustainability_criteria"].setdefault("use_company_overview_for_sustainability_keywords", True)
     if not isinstance(filters.get("general_settings"), dict):
         filters["general_settings"] = base["general_settings"]
     else:
@@ -507,11 +508,16 @@ def render_settings_view() -> None:
                     value="\n".join((crit.get("negative") or [])),
                     height=180,
                 )
+                use_co = st.checkbox(
+                    "Use company overview when checking sustainability keywords",
+                    value=crit.get("use_company_overview_for_sustainability_keywords", True),
+                )
                 submitted = st.form_submit_button("Save sustainability settings")
                 if submitted:
                     filters["sustainability_criteria"] = {
                         "positive": _split_lines(pos),
                         "negative": _split_lines(neg),
+                        "use_company_overview_for_sustainability_keywords": use_co,
                     }
                     _save_job_filters(filters)
                     st.success("Saved sustainability settings.")

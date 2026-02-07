@@ -67,7 +67,8 @@ def _get_job_filters():
         'location_priorities': {},
         'sustainability_criteria': {
             'positive': [],
-            'negative': []
+            'negative': [],
+            'use_company_overview_for_sustainability_keywords': True,
         },
         'general_settings': {
             'resume_theme': 'engineeringclassic'
