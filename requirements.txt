@@ -1,13 +1,11 @@
 flask
 requests
 python-dotenv
-beautifulsoup4
 google-genai
 html2text
 apify-client
 linkedin-scraper
 selenium
-webdriver-manager
 httpcore
 PyPDF2
 pdfminer.six
