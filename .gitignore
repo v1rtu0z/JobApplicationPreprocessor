@@ -6,3 +6,5 @@ __pycache__
 /local_data
 job_preferences.yaml
 .vscode
+.venv
+.pytest_cache

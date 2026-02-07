@@ -6,12 +6,11 @@ from utils import (
     parse_location,
     get_location_priority,
     setup_driver,
-    scrape_multiple_pages,
-    fetch_jobs_via_apify,
     SHEET_HEADER,
 )
 from config import _get_job_filters, _save_job_filters, CONFIG_FILE
 from api_methods import get_search_parameters
+from core import ApifyDataSource, LinkedInDataSource
 
 from .constants import CHECK_SUSTAINABILITY, email_address, linkedin_password
 from .filtering import (
@@ -25,13 +24,35 @@ from .resumes import process_resumes_and_cover_letters
 from .validation import validate_jobs_and_fetch_missing_data
 
 
+def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None:
+    """Build SHEET_HEADER row list from a normalized job item. Returns None if should skip."""
+    job_title = _normalize_job_title(normalized.get("job_title", ""))
+    company_name = (normalized.get("company_name") or "").strip()
+    job_url = (normalized.get("job_url") or "").strip()
+    raw_location = (normalized.get("location") or "").strip()
+    job_description = (normalized.get("job_description") or "").strip()
+    if not (job_title and company_name and job_url):
+        return None
+    should_skip, _ = _apply_keyword_filters(job_title, company_name, raw_location, filters)
+    if should_skip:
+        return None
+    clean_location = parse_location(raw_location) if raw_location else ""
+    location_priority = get_location_priority(clean_location)
+    row_data = [
+        company_name, job_title, clean_location, str(location_priority),
+        job_description, job_url, "", "", "", "FALSE", "FALSE",
+        "", "", "FALSE", "",
+    ]
+    while len(row_data) < len(SHEET_HEADER):
+        row_data.append("")
+    return row_data
+
+
 def collect_and_filter_jobs(driver, sheet, search_urls: list = None):
-    """Collect jobs from LinkedIn search URLs, apply keyword filters, add to DB. Returns list of (job_url, company_name)."""
+    """Collect jobs from LinkedIn search URLs via LinkedInDataSource, apply filters, add to DB. Returns list of (job_url, company_name)."""
     if not search_urls:
         print("No search URLs provided for LinkedIn crawling.")
         return []
-
-    from linkedin_scraper import Job
 
     print("\n" + "=" * 60)
     print("COLLECTION PHASE: Gathering all jobs from search URLs")
@@ -41,51 +62,27 @@ def collect_and_filter_jobs(driver, sheet, search_urls: list = None):
     filters = _get_job_filters()
     new_rows = []
     jobs_to_scrape = []
+    source = LinkedInDataSource()
 
     for search_url in search_urls:
         print(f"Collecting jobs from search URL: {search_url}")
-        job_listings = scrape_multiple_pages(driver, search_url, max_pages=5)
-        print(f"Found {len(job_listings)} job listings")
-
-        for job_obj in job_listings:
+        count = 0
+        for normalized in source.fetch_jobs(search_url=search_url, driver=driver, max_pages=5):
             try:
-                if not (job_obj.job_title and job_obj.company):
-                    continue
-
-                job_title = _normalize_job_title(job_obj.job_title)
-                company_name = job_obj.company.strip()
-                job_url = getattr(job_obj, 'linkedin_url', None)
-                if not job_url:
-                    continue
-
-                raw_location = getattr(job_obj, 'location', '')
-                should_skip, skip_reason = _apply_keyword_filters(job_title, company_name, raw_location, filters)
-                if should_skip:
-                    continue
-
-                job_key = f"{job_title} @ {company_name}"
+                job_key = f"{_normalize_job_title(normalized.get('job_title', ''))} @ {(normalized.get('company_name') or '').strip()}"
                 if job_key in existing_jobs:
                     continue
-
-                clean_location = parse_location(raw_location) if raw_location else ''
-                location_priority = get_location_priority(clean_location)
-
-                row_data = [
-                    company_name, job_title, clean_location, location_priority,
-                    '', job_url, '', '', '', 'FALSE', 'FALSE',
-                    '', '', 'FALSE', '',
-                ]
-                while len(row_data) < len(SHEET_HEADER):
-                    row_data.append('')
-
+                row_data = _normalized_to_row_data(normalized, filters)
+                if not row_data:
+                    continue
                 new_rows.append(row_data)
                 existing_jobs.add(job_key)
-                jobs_to_scrape.append((job_url, company_name))
+                jobs_to_scrape.append((row_data[5], row_data[0]))  # Job URL, Company Name
+                count += 1
                 print(f"Collected job for detailed scraping: {job_key}")
-
             except Exception as e:
                 print(f"Unexpected error collecting job: {e}")
-                continue
+        print(f"Found {count} job listings")
 
     if new_rows:
         sheet.append_rows(new_rows)
@@ -98,8 +95,9 @@ def collect_and_filter_jobs(driver, sheet, search_urls: list = None):
 
 
 def collect_jobs_via_apify(sheet, search_url=None, params=None):
-    """Collect jobs using Apify. Returns list of (job_url, company_name) for new jobs."""
-    if not utils.APIFY_AVAILABLE:
+    """Collect jobs using ApifyDataSource. Returns list of (job_url, company_name) for new jobs."""
+    source = ApifyDataSource()
+    if not source.is_available():
         print("Apify is currently unavailable (usage limit reached). Skipping collection phase.")
         return []
 
@@ -116,62 +114,27 @@ def collect_jobs_via_apify(sheet, search_url=None, params=None):
     new_rows = []
     new_job_identifiers = []
 
-    inputs = [{'params': params}] if params else [{'search_url': search_url}]
+    inputs = [{"params": params}] if params else [{"search_url": search_url}]
 
     for item_input in inputs:
-        if not utils.APIFY_AVAILABLE:
+        if not source.is_available():
             break
-        url = item_input.get('search_url')
-        p = item_input.get('params')
-
-        if p:
-            job_items = fetch_jobs_via_apify(params=p)
-        else:
-            job_items = fetch_jobs_via_apify(search_url=url)
-
-        for item in job_items:
+        url = item_input.get("search_url")
+        p = item_input.get("params")
+        for normalized in source.fetch_jobs(search_url=url, params=p):
             try:
-                job_title_raw = item.get('job_title', '')
-                company_name = item.get('company', '').strip()
-                job_url = item.get('job_url', '')
-                raw_location = item.get('location', '')
-
-                if not (job_title_raw and company_name and job_url):
-                    continue
-
-                job_title = _normalize_job_title(job_title_raw)
-                should_skip, _ = _apply_keyword_filters(job_title, company_name, raw_location, filters)
-                if should_skip:
-                    continue
-
-                job_key = f"{job_title} @ {company_name}"
+                job_key = f"{_normalize_job_title(normalized.get('job_title', ''))} @ {(normalized.get('company_name') or '').strip()}"
                 if job_key in existing_jobs:
                     continue
-
-                clean_location = parse_location(raw_location) if raw_location else ''
-                location_priority = get_location_priority(clean_location)
-
-                job_description = (
-                    item.get('description', '') or item.get('job_description', '')
-                    or item.get('jobDescription', '') or item.get('jobDescriptionText', '')
-                ).strip()
-
-                row_data = [
-                    company_name, job_title, clean_location, location_priority,
-                    job_description, job_url, '', '', '', 'FALSE', 'FALSE',
-                    '', '', 'FALSE', '',
-                ]
-                while len(row_data) < len(SHEET_HEADER):
-                    row_data.append('')
-
+                row_data = _normalized_to_row_data(normalized, filters)
+                if not row_data:
+                    continue
                 new_rows.append(row_data)
                 existing_jobs.add(job_key)
-                new_job_identifiers.append((job_url, company_name))
+                new_job_identifiers.append((row_data[5], row_data[0]))  # Job URL, Company Name
                 print(f"Collected job via Apify: {job_key}")
-
             except Exception as e:
                 print(f"Unexpected error processing Apify job item: {e}")
-                continue
 
     if new_rows:
         sheet.append_rows(new_rows)
