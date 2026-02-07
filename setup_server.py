@@ -222,9 +222,12 @@ SETUP_HTML = r"""<!DOCTYPE html>
 
     <!-- SERVER_URL and API_KEY are embedded in the build; not shown in setup form -->
     <section>
-      <h2>Your contact</h2>
+      <h2>Your contact & location</h2>
       <label for="email_address">Email address (used by the app) <span class="required">*</span></label>
       <input type="text" id="email_address" name="email_address" placeholder="you@example.com" autocomplete="email">
+      <label for="location">Default job search location (e.g. Remote, London, United States)</label>
+      <input type="text" id="location" name="location" placeholder="e.g. Remote" autocomplete="off">
+      <p class="hint">Used when generating LinkedIn search parameters if not specified in additional details.</p>
     </section>
 
     <section>
@@ -265,6 +268,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
       <input type="hidden" id="f_backup_gemini_api_key" name="backup_gemini_api_key">
       <input type="hidden" id="f_gemini_model" name="gemini_model">
       <input type="hidden" id="f_email_address" name="email_address">
+      <input type="hidden" id="f_location" name="location">
       <input type="hidden" id="f_linkedin_password" name="linkedin_password">
       <input type="hidden" id="f_use_local_storage" name="use_local_storage">
       <input type="hidden" id="f_check_sustainability" name="check_sustainability">
@@ -343,6 +347,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
       document.getElementById('f_backup_gemini_api_key').value = document.getElementById('backup_gemini_api_key').value;
       document.getElementById('f_gemini_model').value = document.getElementById('gemini_model').value || 'gemini-2.0-flash';
       document.getElementById('f_email_address').value = email;
+      document.getElementById('f_location').value = document.getElementById('location').value || '';
       document.getElementById('f_linkedin_password').value = document.getElementById('linkedin_password').value;
       document.getElementById('f_use_local_storage').value = document.querySelector('input[name="use_local_storage"]').checked ? 'on' : '';
       document.getElementById('f_check_sustainability').value = document.querySelector('input[name="check_sustainability"]').checked ? 'on' : '';
@@ -356,6 +361,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
       fd.append('backup_gemini_api_key', document.getElementById('backup_gemini_api_key').value);
       fd.append('gemini_model', document.getElementById('gemini_model').value || 'gemini-2.0-flash');
       fd.append('email_address', email);
+      fd.append('location', document.getElementById('location').value || '');
       fd.append('linkedin_password', document.getElementById('linkedin_password').value);
       fd.append('use_local_storage', document.querySelector('input[name="use_local_storage"]').checked ? 'on' : '');
       fd.append('check_sustainability', document.querySelector('input[name="check_sustainability"]').checked ? 'on' : '');
@@ -426,6 +432,19 @@ def create_app(app_root: Path):
             if pf and pf.filename:
                 path = root / "job_preferences.yaml"
                 pf.save(str(path))
+        # If location was set in the form, update job_preferences.yaml (create or merge)
+        location_val = (form.get("location") or "").strip()
+        if location_val:
+            import os
+            from config import _get_job_filters, _save_job_filters
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(root)
+                filters = _get_job_filters()
+                filters["default_search_location"] = location_val
+                _save_job_filters(filters)
+            finally:
+                os.chdir(orig_cwd)
         add_path = root / "additional_details.txt"
         add_text = (form.get("additional_details") or "").strip()
         if add_text:

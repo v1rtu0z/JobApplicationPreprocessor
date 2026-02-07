@@ -557,7 +557,10 @@ def get_search_parameters(resume_json: dict) -> list[dict]:
             print(f"Warning: {additional_details_path} not found. LLM results may be less personalized.")
 
         model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
-        
+        filters = _get_job_filters()
+        default_location = (filters.get('default_search_location') or '').strip()
+        location_line = f"\nDefault job search location (use when not specified in additional details): {default_location}\n" if default_location else ""
+
         # Build prompt for generating search parameters
         prompt = f"""Based on the following resume and additional details, generate a list of search parameters for LinkedIn job searches.
 The goal is to find jobs that are a good fit for the user's background and preferences.
@@ -566,7 +569,7 @@ Resume:
 {json.dumps(resume_json, indent=2)}
 
 Additional Details:
-{additional_details}
+{additional_details}{location_line}
 
 Return a JSON list of objects. Each object should have:
 - keywords: string (e.g., "Software Engineer", "Project Manager", "Data Scientist")

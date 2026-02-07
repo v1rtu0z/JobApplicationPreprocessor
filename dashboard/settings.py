@@ -19,6 +19,7 @@ def _split_lines(text: str) -> list[str]:
 def _default_job_filters() -> dict:
     """Default structure for job_preferences.yaml (mirrors config.py defaults)."""
     return {
+        "default_search_location": "",
         "job_title_skip_keywords": [],
         "job_title_skip_keywords_2": [],
         "company_skip_keywords": [],

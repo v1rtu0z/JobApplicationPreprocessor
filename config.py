@@ -60,6 +60,7 @@ def _get_job_filters():
     
     # Default filters and settings
     default_filters = {
+        'default_search_location': '',  # Default location for job search (used when generating search parameters)
         'job_title_skip_keywords': [],
         'job_title_skip_keywords_2': [],
         'company_skip_keywords': [],

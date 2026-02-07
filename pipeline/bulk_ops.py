@@ -160,17 +160,15 @@ def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_proce
 
 
 def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
-    """Fetch company overviews (crawl then Apify fallback). Updates cache and sheet. Returns count.
-    Only fetches COs for jobs that pass the default dashboard filter (so we don't crawl for
-    applied/expired/poor-fit/unsustainable jobs that would be hidden by default)."""
+    """Fetch company overviews: Apify first (prioritizing companies with multiple jobs), LinkedIn crawl as backup when Apify is unavailable or fails.
+    Only fetches COs for jobs that pass the default dashboard filter."""
     print("\n" + "=" * 60)
     print("COMPANY OVERVIEW PHASE: Fetching missing company overviews")
     print("=" * 60 + "\n")
 
     default_filter_keys = _default_filter_job_keys(sheet)
     all_rows = sheet.get_all_records()
-    companies_to_fetch = []
-    company_jobs = {}
+    company_jobs = {}  # company_key -> list of (job_url, company_name); use first company_name as display name
 
     for row in all_rows:
         job_url = row.get('Job URL', '').strip()
@@ -182,7 +180,6 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
             if (job_url, company_name) not in target_jobs:
                 continue
 
-        # Only fetch CO for jobs that would be visible with default dashboard filter
         if (job_url, company_name) not in default_filter_keys:
             continue
 
@@ -195,60 +192,80 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
             continue
 
         if company_key not in company_jobs:
-            companies_to_fetch.append(company_name)
             company_jobs[company_key] = []
         company_jobs[company_key].append((job_url, company_name))
 
-    if not companies_to_fetch:
+    if not company_jobs:
         return 0
 
+    # Prioritize companies with more jobs (one CO benefits multiple rows)
+    companies_sorted = sorted(
+        company_jobs.keys(),
+        key=lambda k: len(company_jobs[k]),
+        reverse=True,
+    )
+    # Use first occurrence's company name for API/crawl (display name)
+    company_names_ordered = []
+    seen = set()
+    for key in companies_sorted:
+        first_company_name = company_jobs[key][0][1]
+        if first_company_name not in seen:
+            seen.add(first_company_name)
+            company_names_ordered.append(first_company_name)
+
     print(f"Limiting to jobs visible with default dashboard filter ({len(default_filter_keys)} jobs).")
-    print(f"Found {len(companies_to_fetch)} unique companies missing CO to fetch")
+    print(f"Found {len(company_names_ordered)} unique companies missing CO (prioritizing companies with multiple jobs)")
     fetched_count = 0
 
-    crawl_successful, crawl_failed = fetch_company_overviews_via_crawling(
-        companies_to_fetch, headless=True, min_delay=12.0, max_delay=20.0
-    )
+    def apply_overview_to_sheet(company_name: str, overview: str):
+        key = normalize_company_name(company_name)
+        if key not in company_jobs:
+            for k, jobs_list in company_jobs.items():
+                if company_name in [j[1] for j in jobs_list]:
+                    key = k
+                    break
+        if key not in company_jobs:
+            return 0
+        company_overview_cache[key] = overview
+        n = 0
+        for job_url, company in company_jobs[key]:
+            sheet.update_job_by_key(job_url, company, {'Company overview': overview, 'CO fetch attempted': 'TRUE'})
+            n += 1
+        return n
 
-    for company_name, overview in crawl_successful.items():
-        company_key = normalize_company_name(company_name)
-        company_overview_cache[company_key] = overview
-        if company_key in company_jobs:
-            for job_url, company in company_jobs[company_key]:
-                sheet.update_job_by_key(job_url, company, {
-                    'Company overview': overview,
-                    'CO fetch attempted': 'TRUE'
-                })
-                fetched_count += 1
-
-    for company_name in crawl_failed:
-        company_key = normalize_company_name(company_name)
-        if company_key in company_jobs:
-            for job_url, company in company_jobs[company_key]:
-                sheet.update_job_by_key(job_url, company, {'CO fetch attempted': 'TRUE'})
-
-    APIFY_MIN_BATCH_SIZE = 10
-    if crawl_failed and len(crawl_failed) >= APIFY_MIN_BATCH_SIZE and utils.APIFY_AVAILABLE:
-        for i in range(0, len(crawl_failed), COMPANY_OVERVIEW_BATCH_SIZE):
-            if not utils.APIFY_AVAILABLE:
+    # 1) Apify first (when available)
+    if utils.apify_state.is_available():
+        for i in range(0, len(company_names_ordered), COMPANY_OVERVIEW_BATCH_SIZE):
+            if not utils.apify_state.is_available():
                 break
-            batch = crawl_failed[i:i + COMPANY_OVERVIEW_BATCH_SIZE]
+            batch = company_names_ordered[i:i + COMPANY_OVERVIEW_BATCH_SIZE]
             overview_map = get_company_overviews_bulk_via_apify(batch)
             for company_name, overview in overview_map.items():
-                company_key_apify = normalize_company_name(company_name)
-                company_overview_cache[company_key_apify] = overview
-                if company_key_apify in company_jobs:
-                    for job_url, company in company_jobs[company_key_apify]:
-                        sheet.update_job_by_key(job_url, company, {'Company overview': overview})
-                        fetched_count += 1
-                else:
-                    for tracking_key, jobs_list in company_jobs.items():
-                        if company_key_apify in tracking_key or tracking_key in company_key_apify:
-                            for job_url, company in jobs_list:
-                                sheet.update_job_by_key(job_url, company, {'Company overview': overview})
-                                fetched_count += 1
-            if i + COMPANY_OVERVIEW_BATCH_SIZE < len(crawl_failed):
+                if overview:
+                    n = apply_overview_to_sheet(company_name, overview)
+                    fetched_count += n
+            if i + COMPANY_OVERVIEW_BATCH_SIZE < len(company_names_ordered):
                 time.sleep(random.uniform(2, 4))
+
+    # Companies still missing CO (Apify unavailable or did not return for them)
+    remaining_after_apify = [
+        c for c in company_names_ordered
+        if normalize_company_name(c) not in company_overview_cache
+    ]
+
+    # 2) LinkedIn crawl as backup for remaining (Apify unavailable or failed for those)
+    if remaining_after_apify:
+        crawl_successful, crawl_failed = fetch_company_overviews_via_crawling(
+            remaining_after_apify, headless=True, min_delay=12.0, max_delay=20.0
+        )
+        for company_name, overview in crawl_successful.items():
+            n = apply_overview_to_sheet(company_name, overview)
+            fetched_count += n
+        for company_name in crawl_failed:
+            key = normalize_company_name(company_name)
+            if key in company_jobs:
+                for job_url, company in company_jobs[key]:
+                    sheet.update_job_by_key(job_url, company, {'CO fetch attempted': 'TRUE'})
 
     print(f"\nCompany overview fetching completed. Total fetched: {fetched_count} overviews.")
     return fetched_count

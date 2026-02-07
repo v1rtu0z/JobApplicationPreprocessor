@@ -63,17 +63,11 @@ def setup_signal_handlers():
 
 
 def initialize_job_preferences():
-    """Ensure job_preferences.yaml exists."""
+    """Ensure job_preferences.yaml exists with empty defaults (no placeholders)."""
     if not os.path.exists(CONFIG_FILE):
-        import shutil
-        example_file = 'job_preferences.yaml.example'
-        if os.path.exists(example_file):
-            print(f"Creating {CONFIG_FILE} from example...")
-            shutil.copy(example_file, CONFIG_FILE)
-        else:
-            print(f"Creating default {CONFIG_FILE}...")
-            filters = _get_job_filters()
-            _save_job_filters(filters)
+        print(f"Creating {CONFIG_FILE} with empty defaults...")
+        filters = _get_job_filters()
+        _save_job_filters(filters)
 
 
 def initialize_storage(user_name: str):
