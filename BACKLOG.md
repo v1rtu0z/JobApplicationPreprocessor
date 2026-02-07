@@ -6,20 +6,7 @@ Prioritized backlog. Done items (Settings page, Additional details field, Sustai
 
 ## 🔴 High Priority
 
-### 1. Apify: Process Each Response Fully Before Making a New Request
-
-Implement request queuing so each Apify response is fully processed before starting the next request. Reduces risk of hitting rate limits and spreads usage across the month.
-
-- Request queue for Apify calls
-- Process responses sequentially (or controlled concurrency)
-- Retry with exponential backoff; optional usage tracking and throttling
-- Config for batch sizes and delays; logging for monitoring
-
-**Notes:** Review usage in pipeline/ and utils/; consider `queue.Queue` or async; store usage in SQLite/JSON; optional dashboard metric.
-
----
-
-### 2. OOP Refactor – Data-Source Agnostic Architecture
+### 1. OOP Refactor – Data-Source Agnostic Architecture
 
 Refactor to OOP and make the app data-source agnostic (Apify, LinkedIn direct, other boards) without rewriting core logic.
 
@@ -35,7 +22,7 @@ Refactor to OOP and make the app data-source agnostic (Apify, LinkedIn direct, o
 
 ## 🟡 Medium Priority
 
-### 3. Automatic Filter Adjustment When Good Matches Are Found
+### 2. Automatic Filter Adjustment When Good Matches Are Found
 
 When a configurable number of “Good fit” / “Very good fit” jobs are found, adjust filters (e.g. location, keywords) to favor similar opportunities.
 
@@ -45,7 +32,7 @@ When a configurable number of “Good fit” / “Very good fit” jobs are foun
 
 ---
 
-### 4. Keyword Search Improvements with Sustainability
+### 3. Keyword Search Improvements with Sustainability
 
 Integrate sustainability into keyword filtering: weighted positive keywords, negative keywords for unsustainable industries, optional use of company overview.
 
@@ -54,7 +41,7 @@ Integrate sustainability into keyword filtering: weighted positive keywords, neg
 
 ---
 
-### 5. Resume from Text (Additional Details as Starting Point)
+### 4. Resume from Text (Additional Details as Starting Point)
 
 Let “Additional details” (or a dedicated text block) act as a resume starting point: parse text → LLM to structured resume JSON → generate/refine resume.
 
@@ -65,33 +52,32 @@ Let “Additional details” (or a dedicated text block) act as a resume startin
 
 ---
 
-### 6. UI: Buy Me a Coffee, Feedback Link, Activity Page Improvements
-
-- **Buy Me a Coffee** and **Feedback** links in sidebar or footer (URLs from `.env` or YAML)
-- **Activity page:** filters by log level, search, export logs, clearer layout, optional auto-scroll / collapsible sections
+### 5. “Add to Startup” Facilitation
+Make it easy to add the app to system startup: script that detects OS and creates the right entry (Windows Startup folder / registry, macOS LaunchAgent, Linux `~/.config/autostart` or systemd user service). Optional UI toggle in setup/dashboard; doc for manual fallback.
 
 ---
 
-### 7. “Add to Startup” Facilitation
-Make it easy to add the app to system startup: script that detects OS and creates the right entry (Windows Startup folder / registry, macOS LaunchAgent, Linux `~/.config/autostart` or systemd user service). Optional UI toggle in setup/dashboard; doc for manual fallback.
+### 6. Dashboard: Hide Filters on Activity View
+
+When navigating Jobs → Activity, the Jobs sidebar filters (and stats) should not appear on the Activity page. Currently they persist or fade/reactivate in a loop. Settings does not show filters (correct). Fix so Activity behaves like Settings: filters hidden on Activity. Avoid breaking the Jobs UI (no container/placeholder approach that broke layout).
 
 ---
 
 ## 🟢 Low Priority
 
-### 8. Application Name and Branding
+### 7. Application Name and Branding
 
 Choose a memorable name; update README, docs, UI; optionally rename repo and add logo/favicon.
 
 ---
 
-### 9. Dockerization
+### 8. Dockerization
 
 Dockerfile (multi-stage), docker-compose, volume for `local_data/`, env handling. Document run and deploy.
 
 ---
 
-### 10. Build Process for Windows / macOS / Linux
+### 9. Build Process for Windows / macOS / Linux
 
 Build executables (e.g. PyInstaller) and installers per OS; GitHub Actions for builds; document release and, if needed, code signing.
 

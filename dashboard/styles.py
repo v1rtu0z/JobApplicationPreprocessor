@@ -106,6 +106,25 @@ CUSTOM_CSS = """
         color: #c9d1d9 !important;
         padding: 0.35rem 0.6rem !important;
     }
+
+    /* Sidebar support/feedback: pill-style links (target=_self so mailto opens mail client, not a blank tab) */
+    .jab-sidebar-link {
+        display: inline-block !important;
+        font-size: 0.9rem !important;
+        color: #c9d1d9 !important;
+        text-decoration: none !important;
+        background: #21262d !important;
+        border: 1px solid #3d444d !important;
+        border-radius: 999px !important;
+        padding: 0.5rem 0.95rem !important;
+        margin: 0.2rem 0.25rem 0.2rem 0 !important;
+        transition: background 0.15s, border-color 0.15s !important;
+    }
+    .jab-sidebar-link:hover {
+        background: #30363d !important;
+        border-color: #8b949e !important;
+        color: #e6edf3 !important;
+    }
 </style>
 """
 

@@ -36,6 +36,15 @@ def main() -> None:
         index=0,
         key="dashboard_view",
     )
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(
+        '<p style="margin:0.5rem 0 0 0;">'
+        '<a class="jab-sidebar-link" target="_blank" rel="noopener noreferrer" href="https://buymeacoffee.com/v1rtu0z96">☕ Buy Me a Coffee</a> '
+        '<a class="jab-sidebar-link" target="_self" href="mailto:nikolamandic1996@gmail.com">✉ Feedback</a>'
+        '</p>',
+        unsafe_allow_html=True,
+    )
+
     if view == "Activity":
         render_activity_view()
         return

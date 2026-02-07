@@ -78,6 +78,7 @@ def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, 
     if not company_names:
         return {}
 
+    rate_limit()
     if not APIFY_AVAILABLE:
         print("Apify is currently unavailable (usage limit reached). Skipping company overview fetch.")
         return {}
@@ -160,6 +161,7 @@ def fetch_job_details_bulk_via_apify(job_ids: list[str]) -> list[dict]:
     if not job_ids:
         return []
 
+    rate_limit()
     if not APIFY_AVAILABLE:
         print("Apify is currently unavailable (usage limit reached). Skipping job detail fetch.")
         return []
@@ -200,6 +202,7 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
     """
     Fetch jobs from LinkedIn via Apify Actor using parameters extracted from search_url OR provided directly.
     """
+    rate_limit()
     if not APIFY_AVAILABLE:
         print("Apify is currently unavailable (usage limit reached). Skipping job fetch.")
         return []
