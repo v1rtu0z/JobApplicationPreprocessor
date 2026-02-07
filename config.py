@@ -72,7 +72,11 @@ def _get_job_filters():
         'general_settings': {
             'resume_theme': 'engineeringclassic'
         },
-        'search_parameters': []  # Cached search parameters from LLM
+        'search_parameters': [],  # Cached search parameters from LLM
+        'auto_filter_adjustment': {
+            'enabled': False,
+            'good_fit_threshold': 5,
+        },
     }
 
     if os.path.exists(filter_path):

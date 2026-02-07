@@ -40,6 +40,13 @@ location_priorities:
   your_city: 1
   your_country: 2
 
+# Auto-adjust: when at least good_fit_threshold jobs are "Good fit" or "Very good fit",
+# their top locations are added to location_priorities. Set enabled: false to turn off.
+# You can revert the last adjustment in Dashboard → Settings.
+# auto_filter_adjustment:
+#   enabled: false
+#   good_fit_threshold: 5
+
 # -----------------------------------------------------------------------------
 # Sustainability Criteria (Optional)
 # -----------------------------------------------------------------------------

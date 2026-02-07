@@ -27,6 +27,7 @@ def _default_job_filters() -> dict:
         "sustainability_criteria": {"positive": [], "negative": []},
         "general_settings": {"resume_theme": "engineeringclassic"},
         "search_parameters": [],
+        "auto_filter_adjustment": {"enabled": False, "good_fit_threshold": 5},
     }
 
 
@@ -50,6 +51,11 @@ def _merge_with_defaults(filters: dict) -> dict:
         filters["location_priorities"] = {}
     if not isinstance(filters.get("search_parameters"), list):
         filters["search_parameters"] = []
+    if not isinstance(filters.get("auto_filter_adjustment"), dict):
+        filters["auto_filter_adjustment"] = {"enabled": False, "good_fit_threshold": 5}
+    else:
+        filters["auto_filter_adjustment"].setdefault("enabled", False)
+        filters["auto_filter_adjustment"].setdefault("good_fit_threshold", 5)
     return filters
 
 
@@ -184,6 +190,24 @@ def render_settings_view() -> None:
     st.caption(f"Edits here update `{env_path}` and `{CONFIG_FILE}`.")
 
     filters = _merge_with_defaults(_get_job_filters())
+
+    # Auto filter adjustment indicator and revert
+    adj = filters.get("auto_filter_adjustment") or {}
+    last_run = adj.get("last_run") or ""
+    if last_run:
+        display_date = last_run.replace("T", " ").replace("Z", " UTC")[:19]
+        st.info(f"**Auto-adjustment:** Filters were automatically updated on **{display_date}** based on good-fit jobs (location priorities).")
+        if st.button("Revert last auto-adjustment", key="settings_revert_auto_adjust"):
+            try:
+                from pipeline.auto_filter_adjustment import revert_auto_adjustment
+                if revert_auto_adjustment():
+                    st.success("Reverted to filters from before the last auto-adjustment.")
+                    st.rerun()
+                else:
+                    st.warning("Nothing to revert.")
+            except Exception as e:
+                st.error(f"Revert failed: {e}")
+        st.divider()
 
     tab_names = ["App config (.env)", "Keywords", "Locations"]
     if check_sustainability_enabled:
@@ -413,6 +437,25 @@ def render_settings_view() -> None:
     with tabs[2]:
         st.subheader("Location priorities")
         st.caption("Lower numbers are higher priority (used for sorting). Add/remove rows as needed.")
+        adj = filters.get("auto_filter_adjustment") or {}
+        with st.expander("Auto-adjust from good-fit jobs", expanded=False):
+            st.caption("When at least N jobs are \"Good fit\" or \"Very good fit\", add their top locations to priorities (once per cycle).")
+            auto_enabled = adj.get("enabled", False)
+            auto_threshold = int(adj.get("good_fit_threshold", 5)) if isinstance(adj.get("good_fit_threshold"), (int, float)) else 5
+            col_a, col_b = st.columns(2)
+            with col_a:
+                new_auto_enabled = st.checkbox("Enable auto-adjustment", value=auto_enabled, key="settings_auto_adj_enabled")
+            with col_b:
+                new_auto_threshold = st.number_input("Good-fit threshold", min_value=1, max_value=50, value=auto_threshold, key="settings_auto_adj_threshold")
+            if st.button("Save auto-adjust settings", key="settings_save_auto_adj"):
+                filters["auto_filter_adjustment"] = {
+                    **adj,
+                    "enabled": new_auto_enabled,
+                    "good_fit_threshold": new_auto_threshold,
+                }
+                _save_job_filters(filters)
+                st.success("Saved.")
+                st.rerun()
         lp = filters.get("location_priorities", {}) or {}
         editor_key = "settings_location_priorities_editor"
         if not lp or len(lp) == 0:

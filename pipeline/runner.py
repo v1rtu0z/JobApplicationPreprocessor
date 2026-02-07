@@ -199,6 +199,10 @@ def _run_processing_cycle(sheet, resume_json, company_overview_cache, shutdown_r
     sheet.sort((get_column_index(sheet, 'Fit score enum'), 'des'),
                (get_column_index(sheet, 'Location Priority'), 'asc'))
 
+    from .auto_filter_adjustment import maybe_auto_adjust_filters
+    if maybe_auto_adjust_filters(sheet):
+        progress_made_in_cycle = True
+
     print(f"\nProcessing cycle completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     return progress_made_in_cycle
 
