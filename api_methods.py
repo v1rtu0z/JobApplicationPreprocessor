@@ -262,6 +262,43 @@ def create_resume_json_from_pdf(pdf_path: str) -> dict:
     return resume_data
 
 
+def create_resume_json_from_text(text: str, output_path: str = "./resume_data.json") -> dict:
+    """
+    Call the /get-resume-json endpoint to convert free text (e.g. additional details)
+    into structured resume JSON. Validates that personal.full_name is present.
+    """
+    text = (text or "").strip()
+    if len(text) < 20:
+        raise ValueError("Text is too short; provide at least a few sentences (e.g. experience, skills, name).")
+
+    payload = {
+        "resume_content": text,
+        "model_name": os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+    }
+    headers = _get_auth_headers()
+    response = requests.post(
+        f"{SERVER_URL}/get-resume-json",
+        json=payload,
+        headers=headers,
+    )
+    if not response.ok:
+        raise Exception(f"Failed to generate resume from text: {response.status_code} - {response.text}")
+
+    data = response.json()
+    resume_data = data.get("resume_data")
+    if not resume_data:
+        raise Exception("API returned no resume_data")
+
+    # Validate schema: at least personal.full_name required by get_user_name()
+    if not (resume_data.get("personal") or {}).get("full_name"):
+        raise Exception("Generated resume missing personal.full_name; please include your name in the text.")
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(resume_data, f, indent=2, ensure_ascii=False)
+    print(f"Successfully created {output_path} from text.")
+    return resume_data
+
+
 def get_resume_json() -> dict:
     """
     Read resume from resume_data.json and add additional details.

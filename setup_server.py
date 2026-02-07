@@ -245,6 +245,11 @@ SETUP_HTML = r"""<!DOCTYPE html>
       <input type="file" id="resume_pdf" name="resume_pdf" accept=".pdf">
       <label for="additional_details">Additional details (text)</label>
       <textarea id="additional_details" name="additional_details" placeholder="Career goals, salary expectations, location preferences..."></textarea>
+      <p class="hint">Use the button below to generate a structured resume (resume_data.json) from this text. Include your full name, experience, and skills for best results.</p>
+      <p>
+        <button type="button" id="btn_generate_resume_from_text">Generate resume from text</button>
+        <span class="hint" style="margin-left: 0.5em;">⚠️ This will overwrite resume_data.json if it already exists.</span>
+      </p>
       <label for="job_preferences_file">Job preferences (YAML, optional)</label>
       <input type="file" id="job_preferences_file" name="job_preferences_file" accept=".yaml,.yml">
     </section>
@@ -285,6 +290,30 @@ SETUP_HTML = r"""<!DOCTYPE html>
       });
       document.getElementById('validate_results').innerHTML = html;
     }
+    document.getElementById('btn_generate_resume_from_text').addEventListener('click', function() {
+      var text = document.getElementById('additional_details').value.trim();
+      if (!text || text.length < 20) {
+        showMessage('Please enter at least a few sentences in Additional details (include your name, experience, skills).', true);
+        return;
+      }
+      var btn = document.getElementById('btn_generate_resume_from_text');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      fetch('/generate-resume-from-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text })
+      }).then(function(res) { return res.json(); }).then(function(data) {
+        btn.disabled = false;
+        btn.textContent = 'Generate resume from text';
+        if (data.error) { showMessage(data.error, true); return; }
+        showMessage('Resume generated and saved as resume_data.json.', false);
+      }).catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = 'Generate resume from text';
+        showMessage('Request failed: ' + e.message, true);
+      });
+    });
     document.getElementById('btn_validate').addEventListener('click', function() {
       var results = document.getElementById('validate_results');
       results.innerHTML = 'Validating...';
@@ -407,6 +436,26 @@ def create_app(app_root: Path):
             return {"error": f"Failed to write .env: {e}"}, 400
         (root / CONFIG_DONE_FLAG).write_text("", encoding="utf-8")
         return {"ok": True}
+
+    @app.route("/generate-resume-from-text", methods=["POST"])
+    def generate_resume_from_text():
+        root = app.config["APP_ROOT"]
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(root / ".env")
+        except Exception:
+            pass
+        data = request.get_json() or {}
+        text = (data.get("text") or "").strip()
+        if len(text) < 20:
+            return {"error": "Provide at least a few sentences (include your name, experience, skills)."}, 400
+        try:
+            from api_methods import create_resume_json_from_text
+            out_path = str(root / "resume_data.json")
+            create_resume_json_from_text(text, output_path=out_path)
+            return {"ok": True}
+        except Exception as e:
+            return {"error": str(e)}, 400
 
     return app
 

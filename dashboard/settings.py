@@ -312,6 +312,55 @@ def render_settings_view() -> None:
                 _write_text_file(add_path, additional_details.strip())
                 st.success(f"Saved `{add_path}`.")
 
+        col_btn, col_warn = st.columns([1, 4])
+        with col_btn:
+            gen_clicked = st.button("Generate resume from text", key="settings_generate_resume_from_text")
+        with col_warn:
+            st.caption("⚠️ This will overwrite resume_data.json if it already exists.")
+        if gen_clicked:
+            add_text = _read_text_file(add_path)
+            if not add_text or len(add_text.strip()) < 20:
+                st.error("Additional details is empty or too short. Add your name, experience, and skills, then save and try again.")
+            else:
+                try:
+                    from api_methods import create_resume_json_from_text
+                    out_path = str(app_root / "resume_data.json")
+                    create_resume_json_from_text(add_text.strip(), output_path=out_path)
+                    st.success("Resume generated and saved as resume_data.json.")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+
+        resume_json_path = app_root / "resume_data.json"
+        resume_json_existing = _read_text_file(resume_json_path)
+        if not resume_json_existing.strip():
+            resume_json_existing = "{}"
+        with st.form("settings_resume_json_form", clear_on_submit=False):
+            st.markdown("**Edit resume data (resume_data.json)**")
+            resume_json_edit = st.text_area(
+                "resume_data.json",
+                value=resume_json_existing,
+                height=280,
+                help="Structured resume used by analysis and tailored resumes. Must be valid JSON with personal.full_name.",
+                key="settings_resume_json_ta",
+            )
+            saved_resume_json = st.form_submit_button("Save resume data")
+            if saved_resume_json:
+                try:
+                    import json
+                    data = json.loads(resume_json_edit)
+                    if not (data.get("personal") or {}).get("full_name"):
+                        st.error("Resume data must include personal.full_name.")
+                    else:
+                        resume_json_path.write_text(
+                            json.dumps(data, indent=2, ensure_ascii=False),
+                            encoding="utf-8",
+                        )
+                        st.success(f"Saved `{resume_json_path}`.")
+                except json.JSONDecodeError as e:
+                    st.error(f"Invalid JSON: {e}")
+                except Exception as e:
+                    st.error(f"Failed to save: {e}")
+
         st.caption("Upload a resume PDF to the app folder (optional).")
         uploaded_resume = st.file_uploader("Upload resume PDF", type=["pdf"], key="settings_resume_upload")
         if uploaded_resume is not None:

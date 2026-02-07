@@ -41,23 +41,12 @@ Integrate sustainability into keyword filtering: weighted positive keywords, neg
 
 ---
 
-### 4. Resume from Text (Additional Details as Starting Point)
-
-Let “Additional details” (or a dedicated text block) act as a resume starting point: parse text → LLM to structured resume JSON → generate/refine resume.
-
-- Text parsing and LLM prompt for text-to-resume
-- Validation against resume schema; UI option (e.g. in setup) to “Generate resume from text”
-
-**Depends on:** Additional details field (done).
-
----
-
-### 5. “Add to Startup” Facilitation
+### 4. "Add to Startup" Facilitation
 Make it easy to add the app to system startup: script that detects OS and creates the right entry (Windows Startup folder / registry, macOS LaunchAgent, Linux `~/.config/autostart` or systemd user service). Optional UI toggle in setup/dashboard; doc for manual fallback.
 
 ---
 
-### 6. Dashboard: Hide Filters on Activity View
+### 5. Dashboard: Hide Filters on Activity View
 
 When navigating Jobs → Activity, the Jobs sidebar filters (and stats) should not appear on the Activity page. Currently they persist or fade/reactivate in a loop. Settings does not show filters (correct). Fix so Activity behaves like Settings: filters hidden on Activity. Avoid breaking the Jobs UI (no container/placeholder approach that broke layout).
 
@@ -65,19 +54,19 @@ When navigating Jobs → Activity, the Jobs sidebar filters (and stats) should n
 
 ## 🟢 Low Priority
 
-### 7. Application Name and Branding
+### 6. Application Name and Branding
 
 Choose a memorable name; update README, docs, UI; optionally rename repo and add logo/favicon.
 
 ---
 
-### 8. Dockerization
+### 7. Dockerization
 
 Dockerfile (multi-stage), docker-compose, volume for `local_data/`, env handling. Document run and deploy.
 
 ---
 
-### 9. Build Process for Windows / macOS / Linux
+### 8. Build Process for Windows / macOS / Linux
 
 Build executables (e.g. PyInstaller) and installers per OS; GitHub Actions for builds; document release and, if needed, code signing.
 
@@ -88,6 +77,7 @@ Build executables (e.g. PyInstaller) and installers per OS; GitHub Actions for b
 - **Settings page** – Dashboard Settings with .env, Keywords, Locations, Sustainability, Search params, General, Import/Export, Reset
 - **Additional details field** – Setup + Settings + use in `api_methods.py` prompts
 - **Sustainability warning** – Helper text in Dashboard Settings and setup page advising caution when prioritizing financial stability
+- **Resume from text** – Generate resume_data.json from Additional details (text) via LLM; validation for personal.full_name; "Generate resume from text" in setup and Dashboard Settings
 
 ---
 
