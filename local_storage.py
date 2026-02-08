@@ -515,6 +515,28 @@ def delete_resume_local(resume_path: str):
         print(f"Error deleting local resume {resume_path}: {e}")
 
 
+def delete_cover_letter_local(cover_letter_path: str):
+    """Delete a cover letter file from local directory."""
+    if not cover_letter_path:
+        return
+
+    path_obj = Path(cover_letter_path)
+    if cover_letter_path.startswith('./'):
+        file_path = path_obj
+    elif cover_letter_path.startswith('local_data/'):
+        file_path = Path('.') / path_obj
+    else:
+        _, _, cover_letters_dir = ensure_local_directories()
+        file_path = cover_letters_dir / path_obj.name
+
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            print(f"Deleted local cover letter: {file_path}")
+    except Exception as e:
+        print(f"Error deleting local cover letter {cover_letter_path}: {e}")
+
+
 def get_local_file_path(user_name: str, company_name: str, file_type: str = 'resume') -> str:
     """Generate a local file path based on job details."""
     sanitized_user = user_name.replace(' ', '_')

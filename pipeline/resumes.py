@@ -163,12 +163,21 @@ def process_resumes_and_cover_letters(sheet, resume_json, target_jobs=None):
 
         if row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
             resume_url = row.get('Tailored resume url')
+            updates = {}
             if resume_url:
                 delete_resume_local(resume_url)
-                sheet.update_job_by_key(job_url, company_name, {
-                    'Tailored resume url': '',
-                    'Tailored resume json': ''
-                })
+                updates['Tailored resume url'] = ''
+                updates['Tailored resume json'] = ''
+            if row.get('Tailored cover letter (to be humanized)'):
+                from local_storage import delete_cover_letter_local, get_local_file_path
+                from utils import get_user_name
+                user_name = get_user_name(resume_json).replace(' ', '_')
+                company_safe = company_name.replace(' ', '_')
+                cl_filename = get_local_file_path(user_name, company_safe, 'cover_letter')
+                delete_cover_letter_local(f"local_data/cover_letters/{cl_filename}")
+                updates['Tailored cover letter (to be humanized)'] = ''
+            if updates:
+                sheet.update_job_by_key(job_url, company_name, updates)
             continue
 
         cl_done = process_cover_letter(sheet, row, resume_json)

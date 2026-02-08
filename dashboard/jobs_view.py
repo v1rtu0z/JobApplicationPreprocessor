@@ -615,14 +615,34 @@ def render_jobs_view() -> None:
                 st.divider()
                 st.subheader("📝 Cover Letter")
                 with st.expander("View/Edit Cover Letter"):
-                    current_cl_feedback = _get(row, "CL feedback", "")
+                    cl_edit_key = f"cl_edit_{job_key}"
+                    cl_loaded_key = f"{cl_edit_key}__loaded"
+                    if cl_edit_key not in st.session_state:
+                        st.session_state[cl_edit_key] = cover_letter
+                        st.session_state[cl_loaded_key] = cover_letter
+                    else:
+                        last_loaded = st.session_state.get(cl_loaded_key, cover_letter)
+                        if st.session_state.get(cl_edit_key, "") == last_loaded and cover_letter != last_loaded:
+                            st.session_state[cl_edit_key] = cover_letter
+                        st.session_state[cl_loaded_key] = cover_letter
                     st.text_area(
-                        "Current Cover Letter",
-                        value=cover_letter,
+                        "Cover Letter",
                         height=400,
-                        key=f"cl_view_{job_key}",
-                        disabled=True,
+                        key=cl_edit_key,
+                        disabled=False,
                     )
+                    if st.button("💾 Save Cover Letter", key=f"save_cl_{job_key}"):
+                        st.session_state.expanded_job_row = job_key
+                        st.session_state.last_refresh = time.time()
+                        handle_field_update(
+                            job_url_key,
+                            company_key,
+                            "Tailored cover letter (to be humanized)",
+                            st.session_state.get(cl_edit_key, ""),
+                            cover_letter,
+                            "✅ Cover letter saved",
+                        )
+                    current_cl_feedback = _get(row, "CL feedback", "")
                     cf_key = f"cl_feedback_{job_key}"
                     cf_loaded_key = f"{cf_key}__loaded"
                     if cf_key not in st.session_state:
