@@ -74,10 +74,12 @@ def _init_jobs_session_state() -> None:
         st.session_state.filter_applied_status = ["Not Applied", "Unknown"]
     if "filter_expired_status" not in st.session_state:
         st.session_state.filter_expired_status = ["Active", "Unknown"]
-    if "filter_bad_analysis" not in st.session_state:
-        st.session_state.filter_bad_analysis = ["No", "Unknown"]
-    if "filter_sustainable_company" not in st.session_state:
-        st.session_state.filter_sustainable_company = ["Yes", "Unknown"]
+    # When sustainable search is off, analysis pool includes all jobs; keep filter as show-all so view matches.
+    if get_check_sustainability():
+        if "filter_sustainable_company" not in st.session_state:
+            st.session_state.filter_sustainable_company = ["Yes", "Unknown"]
+    else:
+        st.session_state.filter_sustainable_company = []
 
     # Initialize filter keys so keyed widgets use only session_state (no default=).
     # Passing default= to keyed widgets can cause Streamlit to reset selections on rerun/refresh.
@@ -388,7 +390,6 @@ def render_jobs_view() -> None:
         tuple(selections["selected_resume_raw"]),
         tuple(selections["selected_cl_raw"]),
         tuple(selections["selected_expired_raw"]),
-        tuple(selections.get("selected_bad_analysis_raw") or []),
         tuple(selections.get("selected_sustainable_raw") or []),
         selections["selected_jd_data"],
         selections["selected_co_data"],
@@ -422,7 +423,6 @@ def render_jobs_view() -> None:
 
     selected_applied = selections["selected_applied"]
     selected_expired = selections["selected_expired"]
-    selected_bad_analysis = selections.get("selected_bad_analysis") or []
     selected_sustainable = selections.get("selected_sustainable") or []
 
     for _display_idx, (original_row_idx, row) in enumerate(paginated_jobs_list):
@@ -693,6 +693,11 @@ def render_jobs_view() -> None:
             st.write(f"**Location:** {location}")
             if has_location_priorities and location_priority:
                 st.write(f"**Location Priority:** {location_priority}")
+            if "Bad analysis" in df.columns:
+                if has_bad_analysis:
+                    st.warning("⚠️ **Bad analysis** — fit score may be invalid")
+                else:
+                    st.caption("**Bad analysis:** No")
             if fit_score != "Unknown":
                 st.write(f"**Fit Score:** {fit_score}")
             if check_sustainability_enabled and "Sustainable company" in df.columns:
@@ -750,7 +755,7 @@ def render_jobs_view() -> None:
                             company,
                             job_title,
                             "TRUE" if has_bad_analysis else "FALSE",
-                            selected_bad_analysis,
+                            [],  # Bad analysis filter removed; accept all values
                         ),
                     )
 

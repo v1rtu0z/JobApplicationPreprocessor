@@ -11,7 +11,6 @@ FILTER_KEYS = (
     "filter_fit_score",
     "filter_applied_status",
     "filter_expired_status",
-    "filter_bad_analysis",
     "filter_sustainable_company",
     "filter_companies",
     "filter_locations",
@@ -28,7 +27,6 @@ def clear_all_filter_keys() -> None:
     st.session_state.filter_fit_score = []
     st.session_state.filter_applied_status = []
     st.session_state.filter_expired_status = []
-    st.session_state.filter_bad_analysis = []
     st.session_state.filter_sustainable_company = []
     st.session_state.filter_companies = []
     st.session_state.filter_locations = []
@@ -39,13 +37,15 @@ def clear_all_filter_keys() -> None:
     st.session_state.co_data_filter = "Unset"
 
 
-def apply_default_filter_keys(cache: dict) -> None:
-    """Set all filters to default presets (exclude poor fits, show Not Applied/Active/etc). Call before st.rerun()."""
+def apply_default_filter_keys(cache: dict, check_sustainability_enabled: bool = False) -> None:
+    """Set all filters to default presets (exclude poor fits, show Not Applied/Active/etc). Call before st.rerun().
+    When sustainable search is off, sustainable filter is show-all so the default view matches the analysis pool."""
     st.session_state.filter_fit_score = list(cache.get("default_fit_scores", ["Unknown"]))
     st.session_state.filter_applied_status = ["Not Applied", "Unknown"]
     st.session_state.filter_expired_status = ["Active", "Unknown"]
-    st.session_state.filter_bad_analysis = ["No", "Unknown"]
-    st.session_state.filter_sustainable_company = ["Yes", "Unknown"]
+    st.session_state.filter_sustainable_company = (
+        ["Yes", "Unknown"] if check_sustainability_enabled else []
+    )
     st.session_state.filter_companies = []
     st.session_state.filter_locations = []
     st.session_state.filter_has_resume = []
@@ -137,7 +137,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
             st.rerun()
     with default_col:
         if st.sidebar.button("Apply defaults", key="filter_apply_defaults", use_container_width=True):
-            apply_default_filter_keys(cache)
+            apply_default_filter_keys(cache, check_sustainability_enabled)
             st.rerun()
     st.sidebar.caption("💡 Tip: Leave multiselect filters empty to show all")
 
@@ -159,22 +159,6 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     )
     selected_applied = normalize_multiselect(selected_applied_raw)
 
-    has_resume_options = ["Yes", "No", "Unknown"]
-    selected_resume_raw = st.sidebar.multiselect(
-        "Has Resume",
-        has_resume_options,
-        key="filter_has_resume",
-    )
-    selected_resume = normalize_multiselect(selected_resume_raw)
-
-    has_cl_options = ["Yes", "No", "Unknown"]
-    selected_cl_raw = st.sidebar.multiselect(
-        "Has Cover Letter",
-        has_cl_options,
-        key="filter_has_cover_letter",
-    )
-    selected_cl = normalize_multiselect(selected_cl_raw)
-
     expired_options = ["Active", "Expired", "Unknown"]
     selected_expired_raw = st.sidebar.multiselect(
         "Expired Status",
@@ -182,16 +166,6 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         key="filter_expired_status",
     )
     selected_expired = normalize_multiselect(selected_expired_raw)
-
-    if "Bad analysis" in df.columns:
-        selected_bad_analysis_raw = st.sidebar.multiselect(
-            "Bad Analysis",
-            ["Yes", "No", "Unknown"],
-            key="filter_bad_analysis",
-        )
-        selected_bad_analysis = normalize_multiselect(selected_bad_analysis_raw)
-    else:
-        selected_bad_analysis = []
 
     if check_sustainability_enabled and "Sustainable company" in df.columns:
         selected_sustainable_raw = st.sidebar.multiselect(
@@ -244,6 +218,24 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     )
     selected_company = normalize_multiselect(selected_company_raw)
 
+    st.sidebar.divider()
+    st.sidebar.caption("📄 Resume / Cover letter")
+    has_resume_options = ["Yes", "No", "Unknown"]
+    selected_resume_raw = st.sidebar.multiselect(
+        "Has Resume",
+        has_resume_options,
+        key="filter_has_resume",
+    )
+    selected_resume = normalize_multiselect(selected_resume_raw)
+
+    has_cl_options = ["Yes", "No", "Unknown"]
+    selected_cl_raw = st.sidebar.multiselect(
+        "Has Cover Letter",
+        has_cl_options,
+        key="filter_has_cover_letter",
+    )
+    selected_cl = normalize_multiselect(selected_cl_raw)
+
     return {
         "selected_fit_scores": selected_fit_scores,
         "selected_fit_scores_raw": selected_fit_scores_raw,
@@ -255,8 +247,6 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         "selected_cl_raw": selected_cl_raw,
         "selected_expired": selected_expired,
         "selected_expired_raw": selected_expired_raw,
-        "selected_bad_analysis": selected_bad_analysis,
-        "selected_bad_analysis_raw": selected_bad_analysis_raw,
         "selected_sustainable": selected_sustainable,
         "selected_sustainable_raw": selected_sustainable_raw,
         "selected_jd_data": selected_jd_data,
@@ -275,7 +265,6 @@ def apply_filter_mask(df: pd.DataFrame, selections: dict) -> pd.DataFrame:
     filter_mask = pd.Series([True] * len(df), index=df.index)
     selected_fit_scores = selections["selected_fit_scores"]
     selected_applied = selections["selected_applied"]
-    selected_bad_analysis = selections.get("selected_bad_analysis") or []
     selected_expired = selections["selected_expired"]
     selected_sustainable = selections.get("selected_sustainable") or []
     selected_resume = selections["selected_resume"]
@@ -306,18 +295,6 @@ def apply_filter_mask(df: pd.DataFrame, selections: dict) -> pd.DataFrame:
         if "Unknown" in selected_applied:
             applied_mask = applied_mask | (df["Applied"].isna() | (df["Applied"] == ""))
         filter_mask = filter_mask & applied_mask
-
-    if "Bad analysis" in df.columns and selected_bad_analysis:
-        bad_analysis_mask = pd.Series([False] * len(df), index=df.index)
-        if "Yes" in selected_bad_analysis:
-            bad_analysis_mask = bad_analysis_mask | (df["Bad analysis"] == "TRUE")
-        if "No" in selected_bad_analysis:
-            bad_analysis_mask = bad_analysis_mask | (df["Bad analysis"] != "TRUE")
-        if "Unknown" in selected_bad_analysis:
-            bad_analysis_mask = bad_analysis_mask | (
-                df["Bad analysis"].isna() | (df["Bad analysis"] == "")
-            )
-        filter_mask = filter_mask & bad_analysis_mask
 
     if "Job posting expired" in df.columns and selected_expired:
         expired_mask = pd.Series([False] * len(df), index=df.index)

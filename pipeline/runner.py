@@ -111,7 +111,8 @@ def _handle_sleep_logic(has_incomplete_jobs, progress_made_in_cycle, last_check_
     time_since_last_check = time.time() - last_check_time
     should_sleep = (not has_incomplete_jobs or (not progress_made_in_cycle and last_check_time > 0)) and time_since_last_check < current_sleep_interval
 
-    if not progress_made_in_cycle and utils.gemini_rate_limit_hit and has_incomplete_jobs:
+    # Read flag from the owning module so we see the live value (utils re-export is a one-time copy)
+    if not progress_made_in_cycle and utils.gemini_rate_limit.gemini_rate_limit_hit and has_incomplete_jobs:
         sleep_time = GEMINI_RATE_LIMIT_SHORT_WAIT_SECONDS
         print(f"\nGemini rate limit was hit. Short wait of {sleep_time / 60:.1f} minutes before retry...")
         print("(Press Ctrl+C to interrupt and exit)")

@@ -98,6 +98,38 @@ def analyze_all_jobs(sheet, resume_json, target_jobs=None):
             if str(row_for_breakdown.get('CO fetch attempted', '')).strip().upper() == 'TRUE':
                 breakdown["missing_co_fetch_attempted"] = breakdown.get("missing_co_fetch_attempted", 0) + 1
 
+    def _would_analyze(row):
+        if not row.get('Job Title'):
+            return False
+        job_url = row.get('Job URL', '').strip()
+        company_name = row.get('Company Name', '').strip()
+        if target_jobs is not None and (job_url, company_name) not in target_jobs:
+            return False
+        if row.get('Job posting expired') == 'TRUE':
+            return False
+        if not row.get('Job Description'):
+            return False
+        if CHECK_SUSTAINABILITY and not row.get('Company overview'):
+            return False
+        bad_analysis = row.get('Bad analysis', '').strip() == 'TRUE'
+        if not bad_analysis:
+            fit_score_val = (row.get('Fit score') or '').strip()
+            if fit_score_val in ['Poor fit', 'Very poor fit', 'Moderate fit', 'Questionable fit']:
+                return False
+            if fit_score_val in ['Good fit', 'Very good fit'] or fit_score_val:
+                return False
+        if row.get('Applied') == 'TRUE':
+            return False
+        if CHECK_SUSTAINABILITY:
+            sustainable_val = row.get('Sustainable company', '').strip().upper()
+            if sustainable_val == 'FALSE' or sustainable_val != 'TRUE':
+                return False
+        return True
+
+    to_analyze = sum(1 for row in all_rows if _would_analyze(row))
+    total = len([r for r in all_rows if r.get('Job Title')])
+    print(f"Jobs about to be analyzed: {to_analyze} (of {total} job rows in sheet)\n")
+
     for row in all_rows:
         if not row.get('Job Title'):
             break
