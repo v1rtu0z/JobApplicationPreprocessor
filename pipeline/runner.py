@@ -107,19 +107,23 @@ def check_incomplete_jobs(sheet) -> bool:
 
 
 def has_pending_analysis(sheet) -> bool:
-    """Return True if any job has JD (and CO if required) but no Fit score yet.
-    Used to avoid exiting when analysis was skipped (e.g. rate limit) but work remains."""
+    """Return True if any job still needs analysis: no Fit score yet, or marked Bad analysis (re-run).
+    Uses a broad definition (JD + no fit/bad) so we never exit when analysis was skipped (e.g. rate limit)."""
     all_rows = sheet.get_all_records()
     for row in all_rows:
-        if not row.get('Job Title') or row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
+        if not row.get('Job Title') or row.get('Applied') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
             continue
-        if row.get('Fit score'):
+        # Needs analysis if: no fit score yet, or user marked analysis as bad (re-analyze)
+        has_fit = bool((row.get('Fit score') or '').strip())
+        bad_analysis = (row.get('Bad analysis') or '').strip().upper() == 'TRUE'
+        if has_fit and not bad_analysis:
             continue
         if not (row.get('Job Description') or '').strip():
             continue
-        if CHECK_SUSTAINABILITY and not (row.get('Company overview') or '').strip():
-            continue
+        # When sustainability is on, only count jobs we can actually analyze (have CO + Sustainable)
         if CHECK_SUSTAINABILITY:
+            if not (row.get('Company overview') or '').strip():
+                continue
             if (row.get('Sustainable company') or '').strip().upper() != 'TRUE':
                 continue
         return True

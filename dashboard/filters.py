@@ -284,6 +284,9 @@ def apply_filter_mask(df: pd.DataFrame, selections: dict) -> pd.DataFrame:
             )
         else:
             fit_mask = df["Fit score"].isin(selected_fit_scores)
+        # Always show jobs marked Bad analysis so user can re-run or fix
+        if "Bad analysis" in df.columns:
+            fit_mask = fit_mask | (df["Bad analysis"] == "TRUE")
         filter_mask = filter_mask & fit_mask
 
     if "Applied" in df.columns and selected_applied:
