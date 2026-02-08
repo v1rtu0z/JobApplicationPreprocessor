@@ -79,8 +79,10 @@ def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_proce
             jobs_to_mark_filtered.append((job_url, company_name))
             continue
 
-        if not row.get('Job Description') or not row.get('Company overview'):
-            continue  # Can't bulk filter without JD and overview
+        if not row.get('Job Description'):
+            continue
+        if CHECK_SUSTAINABILITY and not row.get('Company overview'):
+            continue  # When sustainability is on, need CO for bulk filter
 
         jobs_to_filter.append({
             'job_url': job_url,
@@ -161,7 +163,11 @@ def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_proce
 
 def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
     """Fetch company overviews: Apify first (prioritizing companies with multiple jobs), LinkedIn crawl as backup when Apify is unavailable or fails.
-    Only fetches COs for jobs that pass the default dashboard filter."""
+    Only fetches COs for jobs that pass the default dashboard filter.
+    When CHECK_SUSTAINABILITY is disabled, COs are not used; skip fetching entirely."""
+    if not CHECK_SUSTAINABILITY:
+        return 0
+
     print("\n" + "=" * 60)
     print("COMPANY OVERVIEW PHASE: Fetching missing company overviews")
     print("=" * 60 + "\n")

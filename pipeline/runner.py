@@ -89,9 +89,16 @@ def check_incomplete_jobs(sheet) -> bool:
         if not row.get('Job Title') or row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
             continue
         needs_jd = not row.get('Job Description') and CRAWL_LINKEDIN
-        needs_co = not row.get('Company overview') and utils.apify_state.is_available()
+        needs_co = (
+            CHECK_SUSTAINABILITY
+            and not row.get('Company overview')
+            and utils.apify_state.is_available()
+        )
         can_get_jd = row.get('Job Description') or CRAWL_LINKEDIN
-        can_get_co = row.get('Company overview') or utils.apify_state.is_available()
+        can_get_co = (
+            row.get('Company overview')
+            or (utils.apify_state.is_available() if CHECK_SUSTAINABILITY else True)
+        )
         needs_analysis = not row.get('Fit score') and can_get_jd and can_get_co
         if needs_jd or needs_co or needs_analysis:
             return True
@@ -150,8 +157,8 @@ def _run_processing_cycle(sheet, resume_json, company_overview_cache, shutdown_r
         if bulk_fetch_missing_job_descriptions(sheet) > 0:
             progress_made_in_cycle = True
 
-    # Company overview fetch uses public LinkedIn company pages (no login). Run every cycle.
-    if fetch_company_overviews(sheet, company_overview_cache) > 0:
+    # Company overview fetch only when sustainability is enabled (COs used only for sustainability).
+    if CHECK_SUSTAINABILITY and fetch_company_overviews(sheet, company_overview_cache) > 0:
         progress_made_in_cycle = True
 
     collected_jobs, total_new_jobs, _ = process_collection_phase(

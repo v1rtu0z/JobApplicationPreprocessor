@@ -211,7 +211,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         JD_FILTER_OPTIONS,
         key="jd_data_filter",
     )
-    if "Company overview" in df.columns:
+    if check_sustainability_enabled and "Company overview" in df.columns:
         selected_co_data = st.sidebar.radio(
             "Company Overview",
             JD_FILTER_OPTIONS,
@@ -266,6 +266,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         "selected_locations_raw": selected_locations_raw,
         "selected_company": selected_company,
         "selected_company_raw": selected_company_raw,
+        "check_sustainability_enabled": check_sustainability_enabled,
     }
 
 
@@ -397,9 +398,10 @@ def apply_filter_mask(df: pd.DataFrame, selections: dict) -> pd.DataFrame:
     elif selected_jd_data == "Missing":
         filter_mask = filter_mask & ~has_jd
 
-    if selected_co_data == "Has":
+    check_sustainability_enabled = selections.get("check_sustainability_enabled", False)
+    if check_sustainability_enabled and selected_co_data == "Has":
         filter_mask = filter_mask & has_co
-    elif selected_co_data == "Missing":
+    elif check_sustainability_enabled and selected_co_data == "Missing":
         filter_mask = filter_mask & ~has_co
 
     if show_priority_only:

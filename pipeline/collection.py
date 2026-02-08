@@ -205,7 +205,7 @@ def process_new_jobs_pipeline(sheet, resume_json, collected_jobs, company_overvi
     progress = False
     if bulk_filter_collected_jobs(sheet, resume_json, target_jobs=collected_jobs, force_process=False) > 0:
         progress = True
-    if fetch_company_overviews(sheet, company_overview_cache, target_jobs=collected_jobs) > 0:
+    if CHECK_SUSTAINABILITY and fetch_company_overviews(sheet, company_overview_cache, target_jobs=collected_jobs) > 0:
         progress = True
     if CHECK_SUSTAINABILITY:
         print("\nValidating sustainability for new jobs...")
@@ -241,7 +241,8 @@ def process_linkedin_collection(sheet, resume_json, company_overview_cache, shut
         progress = True
         validate_jobs_and_fetch_missing_data(driver, sheet)
         bulk_filter_collected_jobs(sheet, resume_json, target_jobs=jobs_to_scrape, force_process=False)
-        fetch_company_overviews(sheet, company_overview_cache, target_jobs=jobs_to_scrape)
+        if CHECK_SUSTAINABILITY:
+            fetch_company_overviews(sheet, company_overview_cache, target_jobs=jobs_to_scrape)
         analyze_all_jobs(sheet, resume_json, target_jobs=jobs_to_scrape)
         process_resumes_and_cover_letters(sheet, resume_json, target_jobs=jobs_to_scrape)
 

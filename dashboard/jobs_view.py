@@ -483,7 +483,7 @@ def render_jobs_view() -> None:
                 title_parts.insert(0, "🔴⚠️")
             else:
                 title_parts.append("⚠️ Missing JD")
-        if missing_co:
+        if check_sustainability_enabled and missing_co:
             title_parts.append("⚠️ Missing CO")
 
         # Show "Apply" at top only when fit is at least moderate; otherwise same fields live in Job details
@@ -755,6 +755,67 @@ def render_jobs_view() -> None:
                     )
 
             st.divider()
+            if check_sustainability_enabled:
+                st.subheader("🏢 Company Overview")
+                if company_overview:
+                    with st.expander("View/Edit Company Overview"):
+                        current_co = company_overview
+                        co_key = f"company_overview_{job_key}"
+                        co_loaded_key = f"{co_key}__loaded"
+                        if co_key not in st.session_state:
+                            st.session_state[co_key] = current_co
+                            st.session_state[co_loaded_key] = current_co
+                        else:
+                            last_loaded = st.session_state.get(co_loaded_key, current_co)
+                            if st.session_state.get(co_key, "") == last_loaded and current_co != last_loaded:
+                                st.session_state[co_key] = current_co
+                            st.session_state[co_loaded_key] = current_co
+                        st.text_area("Company Overview", key=co_key, height=200)
+                        if st.button("💾 Save Company Overview", key=f"save_company_overview_{job_key}"):
+                            st.session_state.expanded_job_row = job_key
+                            st.session_state.last_refresh = time.time()
+                            handle_field_update(
+                                job_url_key,
+                                company_key,
+                                "Company overview",
+                                st.session_state.get(co_key, ""),
+                                current_co,
+                                "✅ Company overview saved!",
+                            )
+                else:
+                    st.warning(
+                        "⚠️ **Missing Company Overview** - Company overview is needed for sustainability checks and better analysis."
+                    )
+                    st.subheader("✏️ Add Company Overview")
+                    current_co = company_overview
+                    co_key = f"company_overview_{job_key}"
+                    co_loaded_key = f"{co_key}__loaded"
+                    if co_key not in st.session_state:
+                        st.session_state[co_key] = current_co
+                        st.session_state[co_loaded_key] = current_co
+                    else:
+                        last_loaded = st.session_state.get(co_loaded_key, current_co)
+                        if st.session_state.get(co_key, "") == last_loaded and current_co != last_loaded:
+                            st.session_state[co_key] = current_co
+                        st.session_state[co_loaded_key] = current_co
+                    st.text_area(
+                        "Company Overview",
+                        key=co_key,
+                        height=200,
+                        help="Paste the company overview/description here",
+                    )
+                    if st.button("💾 Save Company Overview", key=f"save_company_overview_missing_{job_key}"):
+                        st.session_state.expanded_job_row = job_key
+                        st.session_state.last_refresh = time.time()
+                        handle_field_update(
+                            job_url_key,
+                            company_key,
+                            "Company overview",
+                            st.session_state.get(co_key, ""),
+                            current_co,
+                            "✅ Company overview saved!",
+                        )
+                st.divider()
             st.subheader("📋 Job Description")
             if has_job_description:
                 with st.expander("View/Edit Job Description"):
@@ -818,67 +879,6 @@ def render_jobs_view() -> None:
                         st.session_state.get(jd_key, ""),
                         current_jd,
                         "✅ Job description saved! The job will be analyzed in the next cycle.",
-                    )
-
-            st.divider()
-            st.subheader("🏢 Company Overview")
-            if company_overview:
-                with st.expander("View/Edit Company Overview"):
-                    current_co = company_overview
-                    co_key = f"company_overview_{job_key}"
-                    co_loaded_key = f"{co_key}__loaded"
-                    if co_key not in st.session_state:
-                        st.session_state[co_key] = current_co
-                        st.session_state[co_loaded_key] = current_co
-                    else:
-                        last_loaded = st.session_state.get(co_loaded_key, current_co)
-                        if st.session_state.get(co_key, "") == last_loaded and current_co != last_loaded:
-                            st.session_state[co_key] = current_co
-                        st.session_state[co_loaded_key] = current_co
-                    st.text_area("Company Overview", key=co_key, height=200)
-                    if st.button("💾 Save Company Overview", key=f"save_company_overview_{job_key}"):
-                        st.session_state.expanded_job_row = job_key
-                        st.session_state.last_refresh = time.time()
-                        handle_field_update(
-                            job_url_key,
-                            company_key,
-                            "Company overview",
-                            st.session_state.get(co_key, ""),
-                            current_co,
-                            "✅ Company overview saved!",
-                        )
-            else:
-                st.warning(
-                    "⚠️ **Missing Company Overview** - Company overview is needed for sustainability checks and better analysis."
-                )
-                st.subheader("✏️ Add Company Overview")
-                current_co = company_overview
-                co_key = f"company_overview_{job_key}"
-                co_loaded_key = f"{co_key}__loaded"
-                if co_key not in st.session_state:
-                    st.session_state[co_key] = current_co
-                    st.session_state[co_loaded_key] = current_co
-                else:
-                    last_loaded = st.session_state.get(co_loaded_key, current_co)
-                    if st.session_state.get(co_key, "") == last_loaded and current_co != last_loaded:
-                        st.session_state[co_key] = current_co
-                    st.session_state[co_loaded_key] = current_co
-                st.text_area(
-                    "Company Overview",
-                    key=co_key,
-                    height=200,
-                    help="Paste the company overview/description here",
-                )
-                if st.button("💾 Save Company Overview", key=f"save_company_overview_missing_{job_key}"):
-                    st.session_state.expanded_job_row = job_key
-                    st.session_state.last_refresh = time.time()
-                    handle_field_update(
-                        job_url_key,
-                        company_key,
-                        "Company overview",
-                        st.session_state.get(co_key, ""),
-                        current_co,
-                        "✅ Company overview saved!",
                     )
 
     # Sticky pagination

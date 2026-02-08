@@ -118,7 +118,7 @@ def analyze_all_jobs(sheet, resume_json, target_jobs=None):
             _record_skip("Missing Job Description", company_name, job_title, row_for_breakdown=row)
             continue
 
-        if not row.get('Company overview'):
+        if CHECK_SUSTAINABILITY and not row.get('Company overview'):
             _record_skip("Missing Company overview", company_name, job_title, row_for_breakdown=row)
             continue
 
