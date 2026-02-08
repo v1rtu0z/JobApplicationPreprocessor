@@ -26,7 +26,8 @@ SKIP_JD_FETCH = os.getenv("SKIP_JD_FETCH", "false").lower() == "true"
 DASHBOARD_URL = "http://localhost:8501"
 DASHBOARD_LAUNCH_DELAY_SEC = 2.5
 
-# Gemini rate limit
+# Sleep / rate limit
+BASE_SLEEP_INTERVAL_SECONDS = 3600  # 1 hour between checks when no work
 GEMINI_RATE_LIMIT_SHORT_WAIT_SECONDS = 300  # 5 minutes
 
 # Activity log (must match dashboard.py)

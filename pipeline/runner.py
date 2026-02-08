@@ -14,6 +14,7 @@ from utils import (
 )
 
 from .constants import (
+    BASE_SLEEP_INTERVAL_SECONDS,
     CRAWL_LINKEDIN,
     SKIP_JD_FETCH,
     CHECK_SUSTAINABILITY,
@@ -105,48 +106,82 @@ def check_incomplete_jobs(sheet) -> bool:
     return False
 
 
-def _handle_sleep_logic(has_incomplete_jobs, progress_made_in_cycle, last_check_time,
-                        current_sleep_interval, base_sleep_interval, shutdown_requested):
-    """Handle sleep with exponential backoff or short wait on Gemini rate limit. Returns new interval."""
-    time_since_last_check = time.time() - last_check_time
-    should_sleep = (not has_incomplete_jobs or (not progress_made_in_cycle and last_check_time > 0)) and time_since_last_check < current_sleep_interval
+def has_pending_analysis(sheet) -> bool:
+    """Return True if any job has JD (and CO if required) but no Fit score yet.
+    Used to avoid exiting when analysis was skipped (e.g. rate limit) but work remains."""
+    all_rows = sheet.get_all_records()
+    for row in all_rows:
+        if not row.get('Job Title') or row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
+            continue
+        if row.get('Fit score'):
+            continue
+        if not (row.get('Job Description') or '').strip():
+            continue
+        if CHECK_SUSTAINABILITY and not (row.get('Company overview') or '').strip():
+            continue
+        if CHECK_SUSTAINABILITY:
+            if (row.get('Sustainable company') or '').strip().upper() != 'TRUE':
+                continue
+        return True
+    return False
 
-    # Read flag from the owning module so we see the live value (utils re-export is a one-time copy)
-    if not progress_made_in_cycle and utils.gemini_rate_limit.gemini_rate_limit_hit and has_incomplete_jobs:
-        sleep_time = GEMINI_RATE_LIMIT_SHORT_WAIT_SECONDS
-        print(f"\nGemini rate limit was hit. Short wait of {sleep_time / 60:.1f} minutes before retry...")
+
+class SleepController:
+    """Handles sleep duration, Gemini rate-limit short wait, and exponential backoff."""
+
+    def __init__(self, base_interval_seconds: float):
+        self.base_interval = base_interval_seconds
+        self.current_interval = base_interval_seconds
+
+    def run(
+        self,
+        has_work: bool,
+        progress_made_in_cycle: bool,
+        last_check_time: float,
+        shutdown_requested: dict,
+    ) -> float:
+        """Maybe sleep (rate-limit short wait or normal/backoff), then return current interval (possibly updated)."""
+        time_since_last_check = time.time() - last_check_time
+        should_sleep = (
+            (not has_work or (not progress_made_in_cycle and last_check_time > 0))
+            and time_since_last_check < self.current_interval
+        )
+
+        if not progress_made_in_cycle and utils.gemini_rate_limit.gemini_rate_limit_hit and has_work:
+            self._sleep(GEMINI_RATE_LIMIT_SHORT_WAIT_SECONDS, shutdown_requested,
+                       f"Gemini rate limit was hit. Short wait of {GEMINI_RATE_LIMIT_SHORT_WAIT_SECONDS / 60:.1f} minutes before retry...")
+            return self.current_interval
+
+        if should_sleep:
+            sleep_time = self.current_interval - time_since_last_check
+            if not has_work:
+                msg = f"All jobs complete. Sleeping for {sleep_time / 60:.1f} minutes until next check..."
+            else:
+                msg = f"No progress made. Sleeping for {sleep_time / 60:.1f} minutes to avoid tight loop (exponential backoff: {self.current_interval / 3600:.1f}h)..."
+            self._sleep(sleep_time, shutdown_requested, msg)
+
+            if not progress_made_in_cycle and last_check_time > 0:
+                self.current_interval = min(self.current_interval * 2, 86400)
+                print(f"Exponential backoff: Next sleep interval will be {self.current_interval / 3600:.1f}h")
+                return self.current_interval
+
+            if shutdown_requested.get('flag'):
+                print("\nShutdown requested during sleep, exiting...")
+
+        return self.current_interval
+
+    def _sleep(self, sleep_time: float, shutdown_requested: dict, message: str) -> None:
+        print(f"\n{message}")
         print("(Press Ctrl+C to interrupt and exit)")
         sleep_chunk = 5
         slept = 0
-        while slept < sleep_time and not shutdown_requested['flag']:
-            time.sleep(min(sleep_chunk, sleep_time - slept))
-            slept += sleep_chunk
-        return current_sleep_interval
-
-    if should_sleep:
-        sleep_time = current_sleep_interval - time_since_last_check
-        if not has_incomplete_jobs:
-            print(f"All jobs complete. Sleeping for {sleep_time / 60:.1f} minutes until next check...")
-        else:
-            print(f"No progress made on incomplete jobs. Sleeping for {sleep_time / 60:.1f} minutes to avoid tight loop (exponential backoff: {current_sleep_interval / 3600:.1f}h)...")
-        print("(Press Ctrl+C to interrupt and exit)")
-        sleep_chunk = 5
-        slept = 0
-        while slept < sleep_time and not shutdown_requested['flag']:
+        while slept < sleep_time and not shutdown_requested.get('flag'):
             time.sleep(min(sleep_chunk, sleep_time - slept))
             slept += sleep_chunk
 
-        if not progress_made_in_cycle and last_check_time > 0:
-            new_interval = current_sleep_interval * 2
-            if new_interval > 86400:
-                new_interval = 86400
-            print(f"Exponential backoff: Next sleep interval will be {new_interval / 3600:.1f}h")
-            return new_interval
-
-        if shutdown_requested['flag']:
-            print("\nShutdown requested during sleep, exiting...")
-
-    return current_sleep_interval
+    def reset_to_base(self) -> None:
+        """Reset current interval to base (e.g. after progress was made)."""
+        self.current_interval = self.base_interval
 
 
 def _run_processing_cycle(sheet, resume_json, company_overview_cache, shutdown_requested):
@@ -232,8 +267,7 @@ def main():
 
     last_check_time = 0
     progress_made_in_cycle = True
-    base_sleep_interval = 3600
-    current_sleep_interval = base_sleep_interval
+    sleep_controller = SleepController(base_interval_seconds=BASE_SLEEP_INTERVAL_SECONDS)
     company_overview_cache = _build_company_overview_cache(sheet)
     dashboard_launched = {"launched": False}
 
@@ -242,7 +276,13 @@ def main():
     while not shutdown_requested['flag']:
         try:
             has_incomplete_jobs = check_incomplete_jobs(sheet)
-            nothing_else_to_do = not has_incomplete_jobs and not CRAWL_LINKEDIN and not utils.apify_state.is_available()
+            has_pending = has_pending_analysis(sheet)
+            has_work = has_incomplete_jobs or has_pending
+            nothing_else_to_do = (
+                not has_work
+                and not CRAWL_LINKEDIN
+                and not utils.apify_state.is_available()
+            )
             if nothing_else_to_do:
                 print("\n" + "!" * 60)
                 print("NOTHING ELSE TO DO: Apify is unavailable, LinkedIn crawling is disabled, and no pending jobs found.")
@@ -251,16 +291,18 @@ def main():
                 shutdown_requested['flag'] = True
                 break
 
-            current_sleep_interval = _handle_sleep_logic(
-                has_incomplete_jobs, progress_made_in_cycle, last_check_time,
-                current_sleep_interval, base_sleep_interval, shutdown_requested
+            sleep_controller.run(
+                has_work=has_work,
+                progress_made_in_cycle=progress_made_in_cycle,
+                last_check_time=last_check_time,
+                shutdown_requested=shutdown_requested,
             )
 
             if shutdown_requested['flag']:
                 break
 
-            if has_incomplete_jobs:
-                print("Found jobs with missing data. Processing immediately...")
+            if has_work:
+                print("Found jobs with missing data or pending analysis. Processing...")
 
             _launch_dashboard_once(sheet, dashboard_launched)
 
@@ -280,9 +322,9 @@ def main():
             if shutdown_requested['flag']:
                 break
 
-            if progress_made_in_cycle and current_sleep_interval != base_sleep_interval:
-                print(f"\nProgress made! Resetting sleep interval to {base_sleep_interval / 3600:.1f}h")
-                current_sleep_interval = base_sleep_interval
+            if progress_made_in_cycle and sleep_controller.current_interval != sleep_controller.base_interval:
+                print(f"\nProgress made! Resetting sleep interval to {sleep_controller.base_interval / 3600:.1f}h")
+                sleep_controller.reset_to_base()
 
         except KeyboardInterrupt:
             print("\n\nKeyboard interrupt received. Shutting down gracefully...")
