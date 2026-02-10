@@ -8,8 +8,7 @@ from dotenv import load_dotenv
 import utils
 from utils import (
     get_user_name,
-    setup_spreadsheet,
-    get_column_index,
+    setup_database,
     validate_sustainability_for_unprocessed_jobs,
 )
 
@@ -72,20 +71,20 @@ def initialize_job_preferences():
 
 
 def initialize_storage(user_name: str):
-    """Initialize local SQLite storage. Returns sheet (db)."""
+    """Initialize local SQLite storage. Returns the job database."""
     print("\n" + "!" * 60)
     print("Using local storage mode (SQLite database).")
     print("Note: To view your jobs, use the Streamlit dashboard: streamlit run dashboard.py")
     print("!" * 60 + "\n")
     from local_storage import ensure_local_directories
     ensure_local_directories()
-    sheet = setup_spreadsheet(user_name)
-    return sheet
+    db = setup_database(user_name)
+    return db
 
 
-def check_incomplete_jobs(sheet) -> bool:
+def check_incomplete_jobs(db) -> bool:
     """Return True if there are jobs with missing data that can be fetched."""
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     for row in all_rows:
         if not row.get('Job Title') or row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
             continue
@@ -106,10 +105,10 @@ def check_incomplete_jobs(sheet) -> bool:
     return False
 
 
-def has_pending_analysis(sheet) -> bool:
+def has_pending_analysis(db) -> bool:
     """Return True if any job still needs analysis: no Fit score yet, or marked Bad analysis (re-run).
     Uses a broad definition (JD + no fit/bad) so we never exit when analysis was skipped (e.g. rate limit)."""
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     for row in all_rows:
         if not row.get('Job Title') or row.get('Applied') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
             continue
@@ -188,21 +187,21 @@ class SleepController:
         self.current_interval = self.base_interval
 
 
-def _run_processing_cycle(sheet, resume_json, company_overview_cache, shutdown_requested):
+def _run_processing_cycle(db, resume_json, company_overview_cache, shutdown_requested):
     """Run a single processing cycle. Returns True if any progress was made."""
     utils.reset_gemini_rate_limit_flag()
     progress_made_in_cycle = False
 
     if not SKIP_JD_FETCH:
-        if bulk_fetch_missing_job_descriptions(sheet) > 0:
+        if bulk_fetch_missing_job_descriptions(db) > 0:
             progress_made_in_cycle = True
 
     # Company overview fetch only when sustainability is enabled (COs used only for sustainability).
-    if CHECK_SUSTAINABILITY and fetch_company_overviews(sheet, company_overview_cache) > 0:
+    if CHECK_SUSTAINABILITY and fetch_company_overviews(db, company_overview_cache) > 0:
         progress_made_in_cycle = True
 
     collected_jobs, total_new_jobs, _ = process_collection_phase(
-        sheet, resume_json, shutdown_requested, company_overview_cache
+        db, resume_json, shutdown_requested, company_overview_cache
     )
 
     if total_new_jobs > 0:
@@ -210,26 +209,26 @@ def _run_processing_cycle(sheet, resume_json, company_overview_cache, shutdown_r
 
     if collected_jobs:
         print(f"\nProcessing {len(collected_jobs)} total new jobs collected in this cycle...")
-        if process_new_jobs_pipeline(sheet, resume_json, collected_jobs, company_overview_cache):
+        if process_new_jobs_pipeline(db, resume_json, collected_jobs, company_overview_cache):
             progress_made_in_cycle = True
 
     print("\nFinalizing processing cycle (processing leftover batches)...")
-    if bulk_filter_collected_jobs(sheet, resume_json, force_process=True) > 0:
+    if bulk_filter_collected_jobs(db, resume_json, force_process=True) > 0:
         progress_made_in_cycle = True
 
     print("\nFinal pass: Processing all pending jobs in the database...")
     if CHECK_SUSTAINABILITY:
-        if validate_sustainability_for_unprocessed_jobs(sheet) > 0:
+        if validate_sustainability_for_unprocessed_jobs(db) > 0:
             progress_made_in_cycle = True
-    if analyze_all_jobs(sheet, resume_json) > 0:
+    if analyze_all_jobs(db, resume_json) > 0:
         progress_made_in_cycle = True
-    if process_resumes_and_cover_letters(sheet, resume_json) > 0:
+    if process_resumes_and_cover_letters(db, resume_json) > 0:
         progress_made_in_cycle = True
 
     print(f"\nCycle summary:")
     print(f" - New jobs collected: {len(collected_jobs)}")
 
-    if process_linkedin_collection(sheet, resume_json, company_overview_cache, shutdown_requested):
+    if process_linkedin_collection(db, resume_json, company_overview_cache, shutdown_requested):
         progress_made_in_cycle = True
 
     if not progress_made_in_cycle:
@@ -237,11 +236,10 @@ def _run_processing_cycle(sheet, resume_json, company_overview_cache, shutdown_r
 
     print("\nFinalizing processing cycle...")
     print("\nSorting database by fit score and location priority...")
-    sheet.sort((get_column_index(sheet, 'Fit score enum'), 'des'),
-               (get_column_index(sheet, 'Location Priority'), 'asc'))
+    db.sort_by([('Fit score enum', False), ('Location Priority', True)])
 
     from .auto_filter_adjustment import maybe_auto_adjust_filters
-    if maybe_auto_adjust_filters(sheet):
+    if maybe_auto_adjust_filters(db):
         progress_made_in_cycle = True
 
     print(f"\nProcessing cycle completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -267,20 +265,20 @@ def main():
     resume_json = get_resume_json()
     initialize_job_preferences()
     user_name = get_user_name(resume_json)
-    sheet = initialize_storage(user_name)
+    db = initialize_storage(user_name)
 
     last_check_time = 0
     progress_made_in_cycle = True
     sleep_controller = SleepController(base_interval_seconds=BASE_SLEEP_INTERVAL_SECONDS)
-    company_overview_cache = _build_company_overview_cache(sheet)
+    company_overview_cache = _build_company_overview_cache(db)
     dashboard_launched = {"launched": False}
 
-    _launch_dashboard_once(sheet, dashboard_launched)
+    _launch_dashboard_once(db, dashboard_launched)
 
     while not shutdown_requested['flag']:
         try:
-            has_incomplete_jobs = check_incomplete_jobs(sheet)
-            has_pending = has_pending_analysis(sheet)
+            has_incomplete_jobs = check_incomplete_jobs(db)
+            has_pending = has_pending_analysis(db)
             has_work = has_incomplete_jobs or has_pending
             nothing_else_to_do = (
                 not has_work
@@ -308,7 +306,7 @@ def main():
             if has_work:
                 print("Found jobs with missing data or pending analysis. Processing...")
 
-            _launch_dashboard_once(sheet, dashboard_launched)
+            _launch_dashboard_once(db, dashboard_launched)
 
             print(f"\n{'=' * 60}")
             print(f"Starting new processing cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -320,7 +318,7 @@ def main():
                 break
 
             progress_made_in_cycle = _run_processing_cycle(
-                sheet, resume_json, company_overview_cache, shutdown_requested
+                db, resume_json, company_overview_cache, shutdown_requested
             )
 
             if shutdown_requested['flag']:

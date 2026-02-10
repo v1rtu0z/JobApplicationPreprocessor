@@ -54,7 +54,7 @@ def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None
     return row_data
 
 
-def collect_and_filter_jobs(driver, sheet, search_urls: list = None):
+def collect_and_filter_jobs(driver, db, search_urls: list = None):
     """Collect jobs from LinkedIn search URLs via LinkedInDataSource, apply filters, add to DB. Returns list of (job_url, company_name)."""
     if not search_urls:
         print("No search URLs provided for LinkedIn crawling.")
@@ -64,7 +64,7 @@ def collect_and_filter_jobs(driver, sheet, search_urls: list = None):
     print("COLLECTION PHASE: Gathering all jobs from search URLs")
     print("=" * 60 + "\n")
 
-    existing_jobs = get_existing_job_keys(sheet)
+    existing_jobs = get_existing_job_keys(db)
     filters = _get_job_filters()
     new_rows = []
     jobs_to_scrape = []
@@ -91,7 +91,7 @@ def collect_and_filter_jobs(driver, sheet, search_urls: list = None):
         print(f"Found {count} job listings")
 
     if new_rows:
-        sheet.append_rows(new_rows)
+        db.append_rows(new_rows)
         print(f"Successfully added {len(new_rows)} jobs.")
     else:
         print("No new jobs found via LinkedIn crawl.")
@@ -100,7 +100,7 @@ def collect_and_filter_jobs(driver, sheet, search_urls: list = None):
     return jobs_to_scrape
 
 
-def collect_jobs_via_apify(sheet, search_url=None, params=None):
+def collect_jobs_via_apify(db, search_url=None, params=None):
     """Collect jobs using ApifyDataSource. Returns list of (job_url, company_name) for new jobs."""
     source = ApifyDataSource()
     if not source.is_available():
@@ -115,7 +115,7 @@ def collect_jobs_via_apify(sheet, search_url=None, params=None):
     print("COLLECTION PHASE (Apify): Gathering jobs from LinkedIn via Apify")
     print("=" * 60 + "\n")
 
-    existing_jobs = get_existing_job_keys(sheet)
+    existing_jobs = get_existing_job_keys(db)
     filters = _get_job_filters()
     new_rows = []
     new_job_identifiers = []
@@ -143,7 +143,7 @@ def collect_jobs_via_apify(sheet, search_url=None, params=None):
                 print(f"Unexpected error processing Apify job item: {e}")
 
     if new_rows:
-        sheet.append_rows(new_rows)
+        db.append_rows(new_rows)
         print(f"Successfully added {len(new_rows)} jobs.")
     else:
         print("No new jobs found via Apify.")
@@ -151,10 +151,10 @@ def collect_jobs_via_apify(sheet, search_url=None, params=None):
     return new_job_identifiers
 
 
-def process_collection_phase(sheet, resume_json, shutdown_requested, company_overview_cache=None):
+def process_collection_phase(db, resume_json, shutdown_requested, company_overview_cache=None):
     """Handle job collection from Apify and search parameter generation. Returns (collected_jobs, total_new_jobs, cache)."""
     if company_overview_cache is None:
-        company_overview_cache = _build_company_overview_cache(sheet)
+        company_overview_cache = _build_company_overview_cache(db)
 
     filters = _get_job_filters()
     llm_params_list = filters.get('search_parameters', [])
@@ -166,7 +166,7 @@ def process_collection_phase(sheet, resume_json, shutdown_requested, company_ove
         for params in llm_params_list:
             if shutdown_requested['flag']:
                 break
-            new_jobs = collect_jobs_via_apify(sheet, params=params)
+            new_jobs = collect_jobs_via_apify(db, params=params)
             if new_jobs:
                 collected_jobs.extend(new_jobs)
                 total_new_jobs += len(new_jobs)
@@ -189,7 +189,7 @@ def process_collection_phase(sheet, resume_json, shutdown_requested, company_ove
             for params in llm_params_list:
                 if shutdown_requested['flag']:
                     break
-                new_jobs = collect_jobs_via_apify(sheet, params=params)
+                new_jobs = collect_jobs_via_apify(db, params=params)
                 if new_jobs:
                     collected_jobs.extend(new_jobs)
                     total_new_jobs += len(new_jobs)
@@ -200,25 +200,25 @@ def process_collection_phase(sheet, resume_json, shutdown_requested, company_ove
     return collected_jobs, total_new_jobs, company_overview_cache
 
 
-def process_new_jobs_pipeline(sheet, resume_json, collected_jobs, company_overview_cache):
+def process_new_jobs_pipeline(db, resume_json, collected_jobs, company_overview_cache):
     """Process newly collected jobs through the full pipeline. Returns True if any progress."""
     progress = False
-    if bulk_filter_collected_jobs(sheet, resume_json, target_jobs=collected_jobs, force_process=False) > 0:
+    if bulk_filter_collected_jobs(db, resume_json, target_jobs=collected_jobs, force_process=False) > 0:
         progress = True
-    if CHECK_SUSTAINABILITY and fetch_company_overviews(sheet, company_overview_cache, target_jobs=collected_jobs) > 0:
+    if CHECK_SUSTAINABILITY and fetch_company_overviews(db, company_overview_cache, target_jobs=collected_jobs) > 0:
         progress = True
     if CHECK_SUSTAINABILITY:
         print("\nValidating sustainability for new jobs...")
-        if utils.validate_sustainability_for_unprocessed_jobs(sheet) > 0:
+        if utils.validate_sustainability_for_unprocessed_jobs(db) > 0:
             progress = True
-    if analyze_all_jobs(sheet, resume_json, target_jobs=collected_jobs) > 0:
+    if analyze_all_jobs(db, resume_json, target_jobs=collected_jobs) > 0:
         progress = True
-    if process_resumes_and_cover_letters(sheet, resume_json, target_jobs=collected_jobs) > 0:
+    if process_resumes_and_cover_letters(db, resume_json, target_jobs=collected_jobs) > 0:
         progress = True
     return progress
 
 
-def process_linkedin_collection(sheet, resume_json, company_overview_cache, shutdown_requested):
+def process_linkedin_collection(db, resume_json, company_overview_cache, shutdown_requested):
     """Handle LinkedIn scraping if enabled. Returns True if any progress."""
     from .constants import CRAWL_LINKEDIN
     if not CRAWL_LINKEDIN:
@@ -231,19 +231,19 @@ def process_linkedin_collection(sheet, resume_json, company_overview_cache, shut
     progress = False
 
     print("\nChecking for expired job postings...")
-    if validation.validate_jobs_and_fetch_missing_data(driver, sheet) > 0:
+    if validate_jobs_and_fetch_missing_data(driver, db) > 0:
         progress = True
 
     print("Collecting jobs from LinkedIn search results...")
-    jobs_to_scrape = collect_and_filter_jobs(driver, sheet)
+    jobs_to_scrape = collect_and_filter_jobs(driver, db)
 
     if jobs_to_scrape:
         progress = True
-        validate_jobs_and_fetch_missing_data(driver, sheet)
-        bulk_filter_collected_jobs(sheet, resume_json, target_jobs=jobs_to_scrape, force_process=False)
+        validate_jobs_and_fetch_missing_data(driver, db)
+        bulk_filter_collected_jobs(db, resume_json, target_jobs=jobs_to_scrape, force_process=False)
         if CHECK_SUSTAINABILITY:
-            fetch_company_overviews(sheet, company_overview_cache, target_jobs=jobs_to_scrape)
-        analyze_all_jobs(sheet, resume_json, target_jobs=jobs_to_scrape)
-        process_resumes_and_cover_letters(sheet, resume_json, target_jobs=jobs_to_scrape)
+            fetch_company_overviews(db, company_overview_cache, target_jobs=jobs_to_scrape)
+        analyze_all_jobs(db, resume_json, target_jobs=jobs_to_scrape)
+        process_resumes_and_cover_letters(db, resume_json, target_jobs=jobs_to_scrape)
 
     return progress

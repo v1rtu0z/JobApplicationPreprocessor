@@ -27,9 +27,9 @@ from .constants import (
 DEFAULT_BAD_FIT_SCORES = ("Poor fit", "Very poor fit", "Questionable fit")
 
 
-def _default_filter_job_keys(sheet) -> set:
+def _default_filter_job_keys(db) -> set:
     """Return set of (job_url, company_name) that pass the default dashboard filter."""
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     keys = set()
     for row in all_rows:
         if row.get("Applied") == "TRUE":
@@ -50,13 +50,13 @@ def _default_filter_job_keys(sheet) -> set:
     return keys
 
 
-def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_process=False):
+def bulk_filter_collected_jobs(db, resume_json, target_jobs=None, force_process=False):
     """Apply bulk LLM filtering to jobs. Returns number of jobs filtered."""
     print("\n" + "=" * 60)
     print("BULK FILTERING: Using LLM to filter collected jobs")
     print("=" * 60 + "\n")
 
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     jobs_to_filter = []
     jobs_to_mark_filtered = []
 
@@ -75,7 +75,7 @@ def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_proce
             jobs_to_mark_filtered.append((job_url, company_name))
             continue
 
-        if (row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE'):
+        if (row.get('Applied') == 'TRUE' or row.get('Job posting expired') == 'TRUE'):
             jobs_to_mark_filtered.append((job_url, company_name))
             continue
 
@@ -94,7 +94,7 @@ def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_proce
 
     for job_url, company_name in jobs_to_mark_filtered:
         try:
-            sheet.update_job_by_key(job_url, company_name, {'Bulk filtered': 'TRUE'})
+            db.update_job_by_key(job_url, company_name, {'Bulk filtered': 'TRUE'})
         except Exception:
             pass
 
@@ -141,13 +141,13 @@ def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_proce
                     })
                     print(f"  Filtered: {job['title']} @ {job['company']}")
                     total_filtered += 1
-                sheet.update_job_by_key(job['job_url'], job['company'], updates)
+                db.update_job_by_key(job['job_url'], job['company'], updates)
 
         except Exception as e:
             print(f"Error in bulk filtering batch: {e}")
             for job in batch:
                 try:
-                    sheet.update_job_by_key(job['job_url'], job['company'], {'Bulk filtered': 'TRUE'})
+                    db.update_job_by_key(job['job_url'], job['company'], {'Bulk filtered': 'TRUE'})
                 except Exception:
                     pass
 
@@ -161,7 +161,7 @@ def bulk_filter_collected_jobs(sheet, resume_json, target_jobs=None, force_proce
     return total_filtered
 
 
-def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
+def fetch_company_overviews(db, company_overview_cache, target_jobs=None):
     """Fetch company overviews: Apify first (prioritizing companies with multiple jobs), LinkedIn crawl as backup when Apify is unavailable or fails.
     Only fetches COs for jobs that pass the default dashboard filter.
     When CHECK_SUSTAINABILITY is disabled, COs are not used; skip fetching entirely."""
@@ -172,8 +172,8 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
     print("COMPANY OVERVIEW PHASE: Fetching missing company overviews")
     print("=" * 60 + "\n")
 
-    default_filter_keys = _default_filter_job_keys(sheet)
-    all_rows = sheet.get_all_records()
+    default_filter_keys = _default_filter_job_keys(db)
+    all_rows = db.get_all_records()
     company_jobs = {}  # company_key -> list of (job_url, company_name); use first company_name as display name
 
     for row in all_rows:
@@ -194,7 +194,7 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
 
         company_key = normalize_company_name(company_name)
         if company_key in company_overview_cache:
-            sheet.update_job_by_key(job_url, company_name, {'Company overview': company_overview_cache[company_key]})
+            db.update_job_by_key(job_url, company_name, {'Company overview': company_overview_cache[company_key]})
             continue
 
         if company_key not in company_jobs:
@@ -223,7 +223,7 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
     print(f"Found {len(company_names_ordered)} unique companies missing CO (prioritizing companies with multiple jobs)")
     fetched_count = 0
 
-    def apply_overview_to_sheet(company_name: str, overview: str):
+    def apply_overview_to_db(company_name: str, overview: str):
         key = normalize_company_name(company_name)
         if key not in company_jobs:
             for k, jobs_list in company_jobs.items():
@@ -235,7 +235,7 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
         company_overview_cache[key] = overview
         n = 0
         for job_url, company in company_jobs[key]:
-            sheet.update_job_by_key(job_url, company, {'Company overview': overview, 'CO fetch attempted': 'TRUE'})
+            db.update_job_by_key(job_url, company, {'Company overview': overview, 'CO fetch attempted': 'TRUE'})
             n += 1
         return n
 
@@ -248,7 +248,7 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
             overview_map = get_company_overviews_bulk_via_apify(batch)
             for company_name, overview in overview_map.items():
                 if overview:
-                    n = apply_overview_to_sheet(company_name, overview)
+                    n = apply_overview_to_db(company_name, overview)
                     fetched_count += n
             if i + COMPANY_OVERVIEW_BATCH_SIZE < len(company_names_ordered):
                 time.sleep(random.uniform(2, 4))
@@ -266,23 +266,23 @@ def fetch_company_overviews(sheet, company_overview_cache, target_jobs=None):
             remaining_after_apify, headless=True, min_delay=12.0, max_delay=20.0
         )
         for company_name, overview in crawl_successful.items():
-            n = apply_overview_to_sheet(company_name, overview)
+            n = apply_overview_to_db(company_name, overview)
             fetched_count += n
         for company_name in crawl_failed:
             key = normalize_company_name(company_name)
             if key in company_jobs:
                 for job_url, company in company_jobs[key]:
-                    sheet.update_job_by_key(job_url, company, {'CO fetch attempted': 'TRUE'})
+                    db.update_job_by_key(job_url, company, {'CO fetch attempted': 'TRUE'})
 
     print(f"\nCompany overview fetching completed. Total fetched: {fetched_count} overviews.")
     return fetched_count
 
 
-def bulk_fetch_missing_job_descriptions(sheet):
+def bulk_fetch_missing_job_descriptions(db):
     """Fetch missing JDs via crawling then Apify fallback. Returns number updated."""
     from utils import fetch_job_descriptions_via_crawling
 
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     jobs_to_fetch = []
     good_fit_scores = {'Very good fit', 'Good fit', 'Moderate fit', ''}
 
@@ -328,7 +328,7 @@ def bulk_fetch_missing_job_descriptions(sheet):
             updates['Job Description'] = job_data['description']
         elif result_type == 'expired':
             updates['Job posting expired'] = 'TRUE'
-        sheet.update_job_by_key(job_url, company, updates)
+        db.update_job_by_key(job_url, company, updates)
 
     try:
         successful, expired, failed = fetch_job_descriptions_via_crawling(
@@ -345,7 +345,7 @@ def bulk_fetch_missing_job_descriptions(sheet):
     total_updated = len(successful)
     for job in expired:
         try:
-            sheet.update_job_by_key(job['job_url'], job['company'], {'Job posting expired': 'TRUE'})
+            db.update_job_by_key(job['job_url'], job['company'], {'Job posting expired': 'TRUE'})
         except Exception:
             pass
 
@@ -373,7 +373,7 @@ def bulk_fetch_missing_job_descriptions(sheet):
                             if co_desc:
                                 updates['Company overview'] = co_desc
                                 updates['CO fetch attempted'] = 'TRUE'
-                            sheet.update_job_by_key(job['job_url'], job['company'], updates)
+                            db.update_job_by_key(job['job_url'], job['company'], updates)
                             total_updated += 1
                             break
 

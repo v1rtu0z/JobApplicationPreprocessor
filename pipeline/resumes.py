@@ -12,7 +12,7 @@ def delete_resume_local(resume_path: str):
     delete_local(resume_path)
 
 
-def process_cover_letter(sheet, row, resume_json) -> bool:
+def process_cover_letter(db, row, resume_json) -> bool:
     """Process cover letter generation/regeneration for a job. Returns True if work was done."""
     job_url = row.get('Job URL', '')
     company_name = row.get('Company Name', '')
@@ -40,7 +40,7 @@ def process_cover_letter(sheet, row, resume_json) -> bool:
                 'Tailored cover letter (to be humanized)': tailored_cl,
                 'CL feedback addressed': 'TRUE'
             }
-            sheet.update_job_by_key(job_url, company_name, updates)
+            db.update_job_by_key(job_url, company_name, updates)
             print(f"Regenerated cover letter for: {job_title}")
             return True
         except Exception as e:
@@ -62,7 +62,7 @@ def process_cover_letter(sheet, row, resume_json) -> bool:
             company_name_safe = company_name.replace(' ', '_')
             filename = get_local_file_path(user_name, company_name_safe, 'cover_letter')
             save_cover_letter_local(tailored_cl, filename)
-            sheet.update_job_by_key(job_url, company_name, {'Tailored cover letter (to be humanized)': tailored_cl})
+            db.update_job_by_key(job_url, company_name, {'Tailored cover letter (to be humanized)': tailored_cl})
             print(f"Generated cover letter for: {job_title}")
             return True
         except Exception as e:
@@ -75,7 +75,7 @@ def process_cover_letter(sheet, row, resume_json) -> bool:
     return False
 
 
-def process_resume(sheet, row, resume_json) -> bool:
+def process_resume(db, row, resume_json) -> bool:
     """Process resume generation/regeneration for a job. Returns True if work was done."""
     job_url = row.get('Job URL', '')
     company_name = row.get('Company Name', '')
@@ -102,7 +102,7 @@ def process_resume(sheet, row, resume_json) -> bool:
                 'Tailored resume json': tailored_json_str,
                 'Resume feedback addressed': 'TRUE'
             }
-            sheet.update_job_by_key(job_url, company_name, updates)
+            db.update_job_by_key(job_url, company_name, updates)
             print(f"Regenerated resume for: {job_title}")
             return True
         except Exception as e:
@@ -124,7 +124,7 @@ def process_resume(sheet, row, resume_json) -> bool:
                 'Tailored resume url': resume_path,
                 'Tailored resume json': tailored_json_str
             }
-            sheet.update_job_by_key(job_url, company_name, updates)
+            db.update_job_by_key(job_url, company_name, updates)
             print(f"Generated tailored resume for: {job_title}")
             return True
         except Exception as e:
@@ -137,13 +137,13 @@ def process_resume(sheet, row, resume_json) -> bool:
     return False
 
 
-def process_resumes_and_cover_letters(sheet, resume_json, target_jobs=None):
+def process_resumes_and_cover_letters(db, resume_json, target_jobs=None):
     """Process resumes and cover letters for good fit jobs. Returns count processed."""
     print("\n" + "=" * 60)
     print("PROCESSING LOOP: Generating resumes and cover letters")
     print("=" * 60 + "\n")
 
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     processed_count = 0
 
     for row in all_rows:
@@ -177,11 +177,11 @@ def process_resumes_and_cover_letters(sheet, resume_json, target_jobs=None):
                 delete_cover_letter_local(f"local_data/cover_letters/{cl_filename}")
                 updates['Tailored cover letter (to be humanized)'] = ''
             if updates:
-                sheet.update_job_by_key(job_url, company_name, updates)
+                db.update_job_by_key(job_url, company_name, updates)
             continue
 
-        cl_done = process_cover_letter(sheet, row, resume_json)
-        resume_done = process_resume(sheet, row, resume_json)
+        cl_done = process_cover_letter(db, row, resume_json)
+        resume_done = process_resume(db, row, resume_json)
         if cl_done or resume_done:
             processed_count += 1
 

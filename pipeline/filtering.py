@@ -107,7 +107,7 @@ def check_and_process_filters(
     raw_location: str,
     company_overview: str = "",
     job_description: str = "",
-    sheet=None,
+    db=None,
 ) -> FilterResult:
     """
     Check job details against skip keywords and sustainability. Returns a FilterResult.
@@ -142,7 +142,7 @@ def check_and_process_filters(
 
     is_sustainable = None
     if CHECK_SUSTAINABILITY and company_overview:
-        is_sustainable = is_sustainable_company(company_name, company_overview, job_description, sheet)
+        is_sustainable = is_sustainable_company(company_name, company_overview, job_description, db)
 
     if is_sustainable is False:
         analysis_reason = "Unsustainable company (weapons/fossil fuels/harmful industries)"
@@ -184,9 +184,9 @@ def _normalize_job_title(job_title):
     return first_line if is_duplicate else job_title
 
 
-def _build_company_overview_cache(sheet):
-    """Build a dictionary of company name -> company overview from existing sheet data."""
-    all_rows = sheet.get_all_records()
+def _build_company_overview_cache(db):
+    """Build a dictionary of company name -> company overview from existing database records."""
+    all_rows = db.get_all_records()
     cache = {}
     for row in all_rows:
         company_name = row.get('Company Name', '').strip()

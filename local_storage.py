@@ -1,7 +1,5 @@
-import re
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 
 class JobDatabase:
@@ -300,70 +298,15 @@ class JobDatabase:
         conn.commit()
         conn.close()
     
-    def get_column_index(self, column_name: str) -> int:
-        """Get the index of a column by name (0-indexed)."""
-        return self.columns.index(column_name)
-
-    # =========================================================================
-    # Legacy compatibility methods (for gradual migration)
-    # =========================================================================
-    
-    @property
-    def header(self) -> list[str]:
-        """Legacy: Return column names (for compatibility)."""
-        return self.columns
-    
     def get_all_records(self) -> list[dict[str, str]]:
-        """Legacy: Alias for get_all_jobs() without _id field."""
+        """Return all jobs as list of dicts (column name -> value), without internal _id."""
         jobs = self.get_all_jobs()
-        # Remove internal _id from results
         return [{k: v for k, v in job.items() if k != '_id'} for job in jobs]
-    
+
     def append_rows(self, rows: list[list[str]]):
-        """Legacy: Alias for add_jobs_from_rows()."""
+        """Add multiple jobs from row data (list of values in column order). Alias for add_jobs_from_rows()."""
         self.add_jobs_from_rows(rows)
-    
-    def get_all_values(self) -> list[list[str]]:
-        """Legacy: Get all rows as list of lists including header."""
-        jobs = self.get_all_records()
-        result = [self.columns]
-        for job in jobs:
-            result.append([job.get(col, '') for col in self.columns])
-        return result
-    
-    def row_values(self, row: int) -> list[str]:
-        """Legacy: Get values from a specific row (1-indexed, row 1 = header)."""
-        if row == 1:
-            return self.columns
-        
-        # Get all jobs ordered by ID to maintain consistent row ordering
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            columns = ', '.join([f'"{col}"' for col in self.columns])
-            cursor.execute(f'SELECT id, {columns} FROM jobs ORDER BY id')
-            all_rows = cursor.fetchall()
-            
-            # Row 1 is header, so row 2 is first data row (index 0 in all_rows)
-            row_index = row - 2
-            if row_index < 0 or row_index >= len(all_rows):
-                return []
-            
-            row_data = all_rows[row_index]
-            # Skip the id column (index 0), return only data columns
-            return [str(row_data[i + 1]) if row_data[i + 1] is not None else '' for i in range(len(self.columns))]
-        finally:
-            conn.close()
-    
-    def update_cell(self, row: int, col: int, value: str):
-        """Legacy: Update a single cell (1-indexed row/col, row 1 = header)."""
-        if row < 2:
-            raise ValueError("Cannot update header row")
-        
-        job_id = row - 1
-        col_name = self.columns[col - 1]
-        self.update_job(job_id, {col_name: value})
-    
+
     def update_record_by_fields(self, filter_dict: dict[str, str], update_dict: dict[str, str]) -> int:
         """Legacy: Update records matching filter criteria."""
         if not filter_dict or not update_dict:
@@ -382,74 +325,6 @@ class JobDatabase:
             return row_count
         finally:
             conn.close()
-    
-    def batch_update(self, updates: list[dict[str, Any]], value_input_option: str | None = None):
-        """
-        Legacy: Batch update with A1 notation (for compatibility).
-        
-        Args:
-            updates: List of {'range': 'A2', 'values': [['value']]} dicts
-            value_input_option: Ignored (gspread compatibility)
-        """
-        if not updates:
-            return
-        
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        for update in updates:
-            range_str = update['range']
-            values = update['values']
-            
-            # Parse A1 notation
-            match = re.match(r'([A-Z]+)(\d+)', range_str)
-            if not match:
-                continue
-            
-            col_letter = match.group(1)
-            row_num = int(match.group(2))
-            
-            # Convert column letter to index
-            col_idx = 0
-            for char in col_letter:
-                col_idx = col_idx * 26 + (ord(char.upper()) - ord('A') + 1)
-            
-            if col_idx < 1 or col_idx > len(self.columns) or row_num < 2:
-                continue
-            
-            job_id = row_num - 1
-            
-            for row_offset, value_row in enumerate(values):
-                current_job_id = job_id + row_offset
-                for col_offset, val in enumerate(value_row):
-                    current_col_idx = col_idx + col_offset
-                    if current_col_idx <= len(self.columns):
-                        col_name = self.columns[current_col_idx - 1]
-                        cursor.execute(
-                            f'UPDATE jobs SET "{col_name}" = ? WHERE id = ?',
-                            (str(val) if val is not None else '', current_job_id)
-                        )
-        
-        conn.commit()
-        conn.close()
-    
-    def sort(self, *sort_specs):
-        """
-        Legacy: Sort with column indices and 'asc'/'des' strings.
-        
-        Args:
-            *sort_specs: Tuples of (column_index, order) where order is 'asc' or 'des'
-        """
-        converted = []
-        for col_idx, order in sort_specs:
-            col_name = self.columns[col_idx - 1]
-            ascending = order != 'des'
-            converted.append((col_name, ascending))
-        self.sort_by(converted)
-
-
-# Alias for backward compatibility
-LocalSheet = JobDatabase
 
 
 # =========================================================================

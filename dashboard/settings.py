@@ -104,7 +104,6 @@ def _write_env_file(env_path: Path, merged: dict[str, str]) -> None:
     env_path.parent.mkdir(parents=True, exist_ok=True)
     header = "# Managed by the dashboard Settings page\n"
     preferred_order = [
-        "USE_LOCAL_STORAGE",
         "EMAIL_ADDRESS",
         "CRAWL_LINKEDIN",
         "LINKEDIN_PASSWORD",
@@ -231,13 +230,11 @@ def render_settings_view() -> None:
             if candidate.exists():
                 resume_pdf_path_existing = str(candidate.resolve())
 
-        use_local_storage_existing = _parse_bool(existing.get("USE_LOCAL_STORAGE"), default=True)
         crawl_linkedin_existing = _parse_bool(existing.get("CRAWL_LINKEDIN"), default=False)
         check_sust_existing = _parse_bool(existing.get("CHECK_SUSTAINABILITY"), default=False)
 
         with st.form("settings_env_form", clear_on_submit=False):
             st.markdown("### Core")
-            use_local_storage = st.checkbox("Use local storage", value=use_local_storage_existing)
             email_address = st.text_input("Email address", value=email_existing)
             server_url = st.text_input("Server URL", value=server_url_existing)
 
@@ -302,7 +299,6 @@ def render_settings_view() -> None:
                     st.error("Email address cannot be empty.")
                 else:
                     merged = dict(existing)
-                    merged["USE_LOCAL_STORAGE"] = "true" if use_local_storage else "false"
                     merged["EMAIL_ADDRESS"] = email_address.strip()
                     merged["SERVER_URL"] = server_url.strip()
                     merged["CRAWL_LINKEDIN"] = "true" if crawl_linkedin else "false"

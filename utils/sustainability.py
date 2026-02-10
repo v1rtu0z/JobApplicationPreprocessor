@@ -62,9 +62,9 @@ def _call_gemini_for_sustainability(prompt: str, key_name_context: str = "") -> 
     return None
 
 
-def _build_sustainability_cache(sheet):
-    """Build a dictionary of company name -> sustainability status from existing sheet data."""
-    all_rows = sheet.get_all_records()
+def _build_sustainability_cache(db):
+    """Build a dictionary of company name -> sustainability status from existing database records."""
+    all_rows = db.get_all_records()
     cache = {}
     for row in all_rows:
         company_name = row.get('Company Name', '').strip()
@@ -79,22 +79,22 @@ def _build_sustainability_cache(sheet):
     return cache
 
 
-def get_sustainability_from_sheet(company_name: str, sheet, cache: dict = None) -> str | None:
+def get_sustainability_from_sheet(company_name: str, db, cache: dict = None) -> str | None:
     """Check if sustainability status is already known for a company."""
     if cache is None:
-        cache = _build_sustainability_cache(sheet)
+        cache = _build_sustainability_cache(db)
 
     company_key = normalize_company_name(company_name)
     return cache.get(company_key)
 
 
-def is_sustainable_company_bulk(companies_data: list[dict], sheet=None) -> dict[str, dict]:
+def is_sustainable_company_bulk(companies_data: list[dict], db=None) -> dict[str, dict]:
     """Determine sustainability for multiple companies in bulk."""
     results = {}
 
     sustainability_cache = None
-    if sheet:
-        sustainability_cache = _build_sustainability_cache(sheet)
+    if db:
+        sustainability_cache = _build_sustainability_cache(db)
 
     remaining_companies = []
     for data in companies_data:
@@ -188,11 +188,11 @@ Example:
     return results
 
 
-def is_sustainable_company(company_name: str, company_overview: str, job_description: str, sheet=None) -> bool | None:
+def is_sustainable_company(company_name: str, company_overview: str, job_description: str, db=None) -> bool | None:
     """Determine if a company is sustainable. Checks cache first to avoid redundant API calls."""
-    if sheet:
-        sustainability_cache = _build_sustainability_cache(sheet)
-        cached_result = get_sustainability_from_sheet(company_name, sheet, cache=sustainability_cache)
+    if db:
+        sustainability_cache = _build_sustainability_cache(db)
+        cached_result = get_sustainability_from_sheet(company_name, db, cache=sustainability_cache)
         if cached_result is not None:
             return cached_result == 'TRUE'
 
@@ -251,13 +251,13 @@ You must respond with ONLY a JSON object in this exact format:
         return None
 
 
-def validate_sustainability_for_unprocessed_jobs(sheet):
+def validate_sustainability_for_unprocessed_jobs(db):
     """Process sustainability checks for jobs that have overview but no definitive Sustainable value."""
     print("\n" + "=" * 60)
     print("SUSTAINABILITY VALIDATION: Checking unprocessed companies")
     print("=" * 60 + "\n")
 
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     companies_to_check = []
     companies_seen = set()
 
@@ -307,7 +307,7 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
         batch = companies_to_check[i:i + batch_size]
         print(f"\nProcessing batch {i // batch_size + 1} ({len(batch)} companies)...")
 
-        batch_results = is_sustainable_company_bulk(batch, sheet=sheet)
+        batch_results = is_sustainable_company_bulk(batch, db=db)
 
         for company_name, result in batch_results.items():
             is_sustainable = result['is_sustainable']
@@ -347,7 +347,7 @@ def validate_sustainability_for_unprocessed_jobs(sheet):
                     bulk_updates.append((job_url, row.get('Company Name', ''), updates))
 
             if bulk_updates:
-                sheet.bulk_update_by_key(bulk_updates)
+                db.bulk_update_by_key(bulk_updates)
                 total_processed += 1
 
     print(f"\nSustainability validation completed. Processed {total_processed} companies.")

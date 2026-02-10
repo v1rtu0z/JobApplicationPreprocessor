@@ -10,7 +10,7 @@ from .filtering import get_sustainability_keyword_matches
 from .resumes import process_cover_letter, process_resume
 
 
-def analyze_single_job(sheet, row, resume_json) -> str | None:
+def analyze_single_job(db, row, resume_json) -> str | None:
     """Analyze a single job and update the database. Returns fit score if performed, None if skipped."""
     if row.get('Fit score') and row.get('Bad analysis', '').strip() != 'TRUE':
         return row.get('Fit score')
@@ -45,7 +45,7 @@ def analyze_single_job(sheet, row, resume_json) -> str | None:
         }
         if row.get('Bad analysis', '').strip() == 'TRUE':
             updates['Bad analysis'] = 'FALSE'
-        sheet.update_job_by_key(job_url, company_name, updates)
+        db.update_job_by_key(job_url, company_name, updates)
 
         if fit_score == 'Very good fit':
             print("\n" + "*" * 60)
@@ -54,8 +54,8 @@ def analyze_single_job(sheet, row, resume_json) -> str | None:
             print("Immediately processing resume and cover letter...")
             print("*" * 60 + "\n")
             try:
-                process_cover_letter(sheet, row, resume_json)
-                process_resume(sheet, row, resume_json)
+                process_cover_letter(db, row, resume_json)
+                process_resume(db, row, resume_json)
             except Exception as e:
                 print(f"Error immediately processing Very good fit job: {e}")
         elif fit_score in ['Good fit', 'Moderate fit']:
@@ -72,13 +72,13 @@ def analyze_single_job(sheet, row, resume_json) -> str | None:
             return None
 
 
-def analyze_all_jobs(sheet, resume_json, target_jobs=None):
+def analyze_all_jobs(db, resume_json, target_jobs=None):
     """Analyze all jobs that don't have a fit score yet. Returns number analyzed."""
     print("\n" + "=" * 60)
     print("ANALYSIS LOOP: Analyzing all unprocessed jobs")
     print("=" * 60 + "\n")
 
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     analyzed_count = 0
     consecutive_analysis_failure_count = 0
     skipped_reasons = {}
@@ -128,7 +128,7 @@ def analyze_all_jobs(sheet, resume_json, target_jobs=None):
 
     to_analyze = sum(1 for row in all_rows if _would_analyze(row))
     total = len([r for r in all_rows if r.get('Job Title')])
-    print(f"Jobs about to be analyzed: {to_analyze} (of {total} job rows in sheet)\n")
+    print(f"Jobs about to be analyzed: {to_analyze} (of {total} job rows in db)\n")
 
     for row in all_rows:
         if not row.get('Job Title'):
@@ -179,7 +179,7 @@ def analyze_all_jobs(sheet, resume_json, target_jobs=None):
                 _record_skip("Sustainability pending (missing overview or not yet validated)", company_name, job_title)
                 continue
 
-        fit_score = analyze_single_job(sheet, row, resume_json)
+        fit_score = analyze_single_job(db, row, resume_json)
         if fit_score:
             analyzed_count += 1
             consecutive_analysis_failure_count = 0

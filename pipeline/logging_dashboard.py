@@ -49,20 +49,20 @@ def _setup_log_capture():
     sys.stderr = _Tee(sys.__stderr__, log_file)
 
 
-def _has_jobs_to_show(sheet) -> bool:
-    """Return True if the sheet has at least one job (so the dashboard has something to show)."""
+def _has_jobs_to_show(db) -> bool:
+    """Return True if the database has at least one job (so the dashboard has something to show)."""
     try:
-        rows = sheet.get_all_records()
+        rows = db.get_all_records()
         return bool(rows) and any(row.get("Job Title") for row in rows)
     except Exception:
         return False
 
 
-def _launch_dashboard_once(sheet, launched_flag: dict) -> None:
+def _launch_dashboard_once(db, launched_flag: dict) -> None:
     """If there are jobs and the dashboard has not been launched yet, start Streamlit and open the browser."""
     if launched_flag.get("launched"):
         return
-    if not _has_jobs_to_show(sheet):
+    if not _has_jobs_to_show(db):
         return
     launched_flag["launched"] = True
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -86,7 +86,7 @@ def _should_skip_expiration_check(row, needs_jd, needs_location):
     return False
 
 
-def validate_jobs_and_fetch_missing_data(driver, sheet):
+def validate_jobs_and_fetch_missing_data(driver, db):
     """Validate non-applied good-fit jobs (expiration, filters), fetch missing JD/location. Returns count."""
     if not CRAWL_LINKEDIN:
         return 0
@@ -97,7 +97,7 @@ def validate_jobs_and_fetch_missing_data(driver, sheet):
     print("JOB VALIDATION: Checking expirations and fetching missing data")
     print("=" * 60 + "\n")
 
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     expired_count = 0
     fetched_count = 0
     not_logged_in = False
@@ -137,7 +137,7 @@ def validate_jobs_and_fetch_missing_data(driver, sheet):
 
         if job_expired:
             print(f"Job has expired: {row.get('Job Title')} @ {company_name}")
-            sheet.update_job_by_key(job_url, company_name, {'Job posting expired': 'TRUE'})
+            db.update_job_by_key(job_url, company_name, {'Job posting expired': 'TRUE'})
             resume_url = row.get('Tailored resume url')
             if resume_url:
                 delete_resume_local(resume_url)
@@ -149,11 +149,11 @@ def validate_jobs_and_fetch_missing_data(driver, sheet):
             job_description = row.get('Job Description', '')
 
             result = check_and_process_filters(
-                job_title, company_name, raw_location, company_overview, job_description, sheet=sheet
+                job_title, company_name, raw_location, company_overview, job_description, db=db
             )
             last_check = datetime.now().isoformat()
             updates = result.row_updates(last_check)
-            sheet.update_job_by_key(job_url, company_name, updates)
+            db.update_job_by_key(job_url, company_name, updates)
             if result.filtered:
                 print(f"  - Filtered job: {result.analysis_reason}")
 
@@ -161,7 +161,7 @@ def validate_jobs_and_fetch_missing_data(driver, sheet):
             print(f"Fetching missing data for: {row.get('Job Title')} @ {company_name}")
             updates = _fetch_job_data_from_linkedin(driver, job_url, needs_jd, needs_location)
             if updates:
-                sheet.update_job_by_key(job_url, company_name, updates)
+                db.update_job_by_key(job_url, company_name, updates)
                 fetched_count += 1
 
     print(f"\nExpiration check completed. Found {expired_count} expired jobs. Fetched data for {fetched_count} jobs.")

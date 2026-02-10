@@ -56,13 +56,10 @@ from .sustainability import (
 )
 
 from .storage import (
-    get_column_index,
-    get_existing_jobs,
     get_existing_job_keys,
     parse_fit_score,
     setup_database,
     setup_driver,
-    setup_spreadsheet,
     update_cell,
 )
 
@@ -103,12 +100,9 @@ __all__ = [
     'is_sustainable_company',
     'is_sustainable_company_bulk',
     'validate_sustainability_for_unprocessed_jobs',
-    'get_column_index',
-    'get_existing_jobs',
     'get_existing_job_keys',
     'parse_fit_score',
     'setup_database',
     'setup_driver',
-    'setup_spreadsheet',
     'update_cell',
 ]

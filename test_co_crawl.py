@@ -46,9 +46,9 @@ DEFAULT_BAD_FIT_SCORES = ("Poor fit", "Very poor fit", "Questionable fit")
 CHECK_SUSTAINABILITY = os.getenv("CHECK_SUSTAINABILITY", "false").lower() == "true"
 
 
-def default_filter_job_keys(sheet) -> set:
+def default_filter_job_keys(db) -> set:
     """Same logic as pipeline.bulk_ops._default_filter_job_keys."""
-    all_rows = sheet.get_all_records()
+    all_rows = db.get_all_records()
     keys = set()
     for row in all_rows:
         if row.get("Applied") == "TRUE":
@@ -69,10 +69,10 @@ def default_filter_job_keys(sheet) -> set:
     return keys
 
 
-def get_companies_missing_co(sheet, limit: int | None = None) -> list[str]:
+def get_companies_missing_co(db, limit: int | None = None) -> list[str]:
     """Return company names that need CO, same logic as fetch_company_overviews in bulk_ops."""
-    default_filter_keys = default_filter_job_keys(sheet)
-    all_rows = sheet.get_all_records()
+    default_filter_keys = default_filter_job_keys(db)
+    all_rows = db.get_all_records()
     companies_to_fetch = []
     seen = set()
 

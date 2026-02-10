@@ -12,7 +12,7 @@ MAX_NEW_LOCATIONS = 5
 PRIORITY_FOR_NEW = 1
 
 
-def maybe_auto_adjust_filters(sheet) -> bool:
+def maybe_auto_adjust_filters(db) -> bool:
     """
     If enabled and good-fit job count >= threshold, add top locations from those jobs
     to location_priorities and save. Stores previous state for revert. Returns True if adjusted.
@@ -28,7 +28,7 @@ def maybe_auto_adjust_filters(sheet) -> bool:
     if threshold <= 0:
         return False
 
-    records = sheet.get_all_records()
+    records = db.get_all_records()
     good_fit = [
         r for r in records
         if (r.get("Fit score") or "").strip() in GOOD_FIT_SCORES
