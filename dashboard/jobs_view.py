@@ -1,5 +1,6 @@
 """Jobs view: list, filters, sorting, pagination, job cards, undo popup."""
 import base64
+import html
 import time
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from .constants import (
     PAGE_SIZE,
     UNDO_POPUP_TIMEOUT,
 )
+from .cover_letter_pdf import cover_letter_text_to_pdf_bytes, safe_cover_letter_pdf_filename
 from .data import (
     get_check_sustainability,
     handle_field_update,
@@ -28,7 +30,9 @@ from .filters import (
     ensure_filter_cache,
     render_sidebar_filters,
 )
-from .job_cards import get_row_value
+from .job_cards import format_date_added, get_row_value
+from pipeline.dashboard_filter import default_dashboard_mask
+from utils.jd_fit import format_jd_fit_score
 
 
 def _init_jobs_session_state() -> None:
@@ -74,6 +78,8 @@ def _init_jobs_session_state() -> None:
         st.session_state.filter_applied_status = ["Not Applied", "Unknown"]
     if "filter_expired_status" not in st.session_state:
         st.session_state.filter_expired_status = ["Active", "Unknown"]
+    if "filter_bad_analysis" not in st.session_state:
+        st.session_state.filter_bad_analysis = ["No", "Unknown"]
     # When sustainable search is off, analysis pool includes all jobs; keep filter as show-all so view matches.
     if get_check_sustainability():
         if "filter_sustainable_company" not in st.session_state:
@@ -93,6 +99,79 @@ def _init_jobs_session_state() -> None:
         st.session_state.filter_has_cover_letter = []
     if "filter_priority_only" not in st.session_state:
         st.session_state.filter_priority_only = False
+
+
+def _handle_undo() -> None:
+    if st.session_state.undo_stack:
+        job_key, field_name, old_value, job_url_key, company_key, company, job_title = (
+            st.session_state.undo_stack.pop()
+        )
+        update_job_field(job_url_key, company_key, field_name, old_value)
+        df = st.session_state.df
+        mask = (df.get("Job URL", "") == job_url_key) & (df.get("Company Name", "") == company_key)
+        df.loc[mask, field_name] = old_value
+        st.session_state.df = df
+        st.session_state.hidden_jobs.discard(job_key)
+        if not st.session_state.undo_stack:
+            st.session_state.undo_stack_timestamp = None
+
+
+@st.fragment(run_every=1)
+def _render_undo_toast() -> None:
+    """Fixed undo toast; reruns every second while visible for live countdown."""
+    if not st.session_state.undo_stack:
+        return
+
+    if st.session_state.undo_stack_timestamp is not None:
+        elapsed = time.time() - st.session_state.undo_stack_timestamp
+        if elapsed >= UNDO_POPUP_TIMEOUT:
+            st.session_state.undo_stack.clear()
+            st.session_state.undo_stack_timestamp = None
+            return
+
+    job_key, field_name, old_value, job_url_key, company_key, company, job_title = (
+        st.session_state.undo_stack[-1]
+    )
+    field_display = {
+        "Applied": "Applied",
+        "Job posting expired": "Expired",
+        "Bad analysis": "Bad analysis",
+        "Sustainable company": "Unsustainable",
+    }.get(field_name, field_name)
+    remaining_time = UNDO_POPUP_TIMEOUT
+    if st.session_state.undo_stack_timestamp is not None:
+        elapsed = time.time() - st.session_state.undo_stack_timestamp
+        remaining_time = max(0, UNDO_POPUP_TIMEOUT - elapsed)
+
+    esc_company = html.escape(company or "")
+    esc_title = html.escape(job_title or "")
+    esc_field = html.escape(field_display)
+    progress_pct = int((remaining_time / UNDO_POPUP_TIMEOUT) * 100) if UNDO_POPUP_TIMEOUT else 0
+
+    with st.container():
+        st.markdown('<div class="undo-marker-unique"></div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="jab-undo-card">
+                <div class="jab-undo-header">
+                    <span class="jab-undo-title">Job hidden</span>
+                    <span class="jab-undo-timer">{int(remaining_time)}s</span>
+                </div>
+                <p class="jab-undo-job">{esc_company}<span class="jab-undo-sep">·</span>{esc_title}</p>
+                <p class="jab-undo-meta">Marked as <strong>{esc_field}</strong></p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.button("Undo", key="undo_button_fixed", on_click=_handle_undo, use_container_width=True)
+        st.markdown(
+            f"""
+            <div class="jab-undo-progress-track">
+                <div class="jab-undo-progress-bar" style="width:{progress_pct}%;"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_jobs_view() -> None:
@@ -141,20 +220,6 @@ def render_jobs_view() -> None:
             )
             st.session_state.undo_stack_timestamp = time.time()
 
-    def handle_undo():
-        if st.session_state.undo_stack:
-            job_key, field_name, old_value, job_url_key, company_key, company, job_title = (
-                st.session_state.undo_stack.pop()
-            )
-            update_job_field(job_url_key, company_key, field_name, old_value)
-            df = st.session_state.df
-            mask = (df.get("Job URL", "") == job_url_key) & (df.get("Company Name", "") == company_key)
-            df.loc[mask, field_name] = old_value
-            st.session_state.df = df
-            st.session_state.hidden_jobs.discard(job_key)
-            if not st.session_state.undo_stack:
-                st.session_state.undo_stack_timestamp = None
-
     # Header with refresh
     col_header1, col_header2, col_header3 = st.columns([3, 1, 1])
     with col_header1:
@@ -188,20 +253,9 @@ def render_jobs_view() -> None:
     with col_header3:
         auto_refresh = st.checkbox("Auto-refresh", value=True, key="jobs_auto_refresh")
 
-    if st.session_state.undo_stack and st.session_state.undo_stack_timestamp is not None:
-        elapsed_time = time.time() - st.session_state.undo_stack_timestamp
-        if elapsed_time >= UNDO_POPUP_TIMEOUT:
-            st.session_state.undo_stack.clear()
-            st.session_state.undo_stack_timestamp = None
-
     if auto_refresh:
         current_time = time.time()
-        refresh_interval = (
-            5
-            if (st.session_state.undo_stack and st.session_state.undo_stack_timestamp)
-            else AUTO_REFRESH_INTERVAL
-        )
-        if current_time - st.session_state.last_refresh > refresh_interval:
+        if current_time - st.session_state.last_refresh > AUTO_REFRESH_INTERVAL:
             st.session_state.last_refresh = current_time
             st.cache_data.clear()
             st.session_state.df, error = load_job_data()
@@ -230,6 +284,15 @@ def render_jobs_view() -> None:
     st.sidebar.divider()
     st.sidebar.header("📊 Statistics")
     st.sidebar.metric("Total Jobs", len(filtered_df))
+    automation_scope_count = int(default_dashboard_mask(df).sum())
+    st.sidebar.metric(
+        "🤖 Automation scope",
+        automation_scope_count,
+        help=(
+            "Jobs the backend pipeline and Telegram bot currently treat as in-scope "
+            "(same rule as 'Apply defaults', independent of your current filter selections)."
+        ),
+    )
     if "Tailored resume url" in filtered_df.columns:
         with_resumes = len(
             filtered_df[
@@ -296,15 +359,16 @@ def render_jobs_view() -> None:
     with col_sort1:
         sort_by_1 = st.selectbox(
             "Primary Sort",
-            ["Location Priority", "Fit Score", "Company", "Location"],
+            ["JD Fit Score", "Location Priority", "Fit Score", "Company", "Location"],
             key="sort_by_1",
-            index=0,
+            # Default: surface best-fitting jobs first.
+            index=2,
         )
         sort_order_1 = st.selectbox("Order", ["Descending", "Ascending"], key="sort_order_1", index=0)
     with col_sort2:
         sort_by_2 = st.selectbox(
             "Secondary Sort",
-            ["Fit Score", "Location Priority", "Company", "Location"],
+            ["JD Fit Score", "Fit Score", "Location Priority", "Company", "Location"],
             key="sort_by_2",
             index=0,
         )
@@ -312,7 +376,7 @@ def render_jobs_view() -> None:
     with col_sort3:
         sort_by_3 = st.selectbox(
             "Tertiary Sort",
-            ["None", "Company", "Location", "Fit Score", "Location Priority"],
+            ["None", "Company", "Location", "JD Fit Score", "Fit Score", "Location Priority"],
             key="sort_by_3",
             index=0,
         )
@@ -321,61 +385,45 @@ def render_jobs_view() -> None:
     sort_columns = []
     sort_ascending = []
 
-    if sort_by_1 == "Location Priority" and "Location Priority" in filtered_df.columns:
-        sort_columns.append("Location Priority")
-        sort_ascending.append(sort_order_1 == "Ascending")
-    elif sort_by_1 == "Fit Score":
-        if "Fit score enum" in filtered_df.columns:
-            sort_columns.append("Fit score enum")
-            sort_ascending.append(sort_order_1 == "Ascending")
-        elif "Fit score" in filtered_df.columns:
-            sort_columns.append("Fit score")
-            sort_ascending.append(sort_order_1 == "Ascending")
-    elif sort_by_1 == "Company":
-        sort_columns.append("Company Name")
-        sort_ascending.append(sort_order_1 == "Ascending")
-    elif sort_by_1 == "Location":
-        sort_columns.append("Location")
-        sort_ascending.append(sort_order_1 == "Ascending")
+    def _append_sort(column_name: str, ui_label: str, ascending: bool) -> None:
+        if ui_label == "JD Fit Score" and "JD fit score" in filtered_df.columns:
+            sort_col = "_sort_jd_fit"
+            filtered_df[sort_col] = pd.to_numeric(filtered_df["JD fit score"], errors="coerce")
+            sort_columns.append(sort_col)
+            sort_ascending.append(ascending)
+        elif ui_label == "Location Priority" and "Location Priority" in filtered_df.columns:
+            sort_columns.append("Location Priority")
+            sort_ascending.append(ascending)
+        elif ui_label == "Fit Score":
+            if "Fit score enum" in filtered_df.columns:
+                sort_col = "_sort_fit_enum"
+                filtered_df[sort_col] = pd.to_numeric(filtered_df["Fit score enum"], errors="coerce")
+                sort_columns.append(sort_col)
+                sort_ascending.append(ascending)
+            elif "Fit score" in filtered_df.columns:
+                sort_columns.append("Fit score")
+                sort_ascending.append(ascending)
+        elif ui_label == "Company":
+            sort_columns.append("Company Name")
+            sort_ascending.append(ascending)
+        elif ui_label == "Location":
+            sort_columns.append("Location")
+            sort_ascending.append(ascending)
+
+    if sort_by_1 != "None":
+        _append_sort("sort_by_1", sort_by_1, sort_order_1 == "Ascending")
 
     if sort_by_2 != sort_by_1 and sort_by_2 != "None":
-        if sort_by_2 == "Location Priority" and "Location Priority" in filtered_df.columns:
-            sort_columns.append("Location Priority")
-            sort_ascending.append(sort_order_2 == "Ascending")
-        elif sort_by_2 == "Fit Score":
-            if "Fit score enum" in filtered_df.columns:
-                sort_columns.append("Fit score enum")
-                sort_ascending.append(sort_order_2 == "Ascending")
-            elif "Fit score" in filtered_df.columns:
-                sort_columns.append("Fit score")
-                sort_ascending.append(sort_order_2 == "Ascending")
-        elif sort_by_2 == "Company":
-            sort_columns.append("Company Name")
-            sort_ascending.append(sort_order_2 == "Ascending")
-        elif sort_by_2 == "Location":
-            sort_columns.append("Location")
-            sort_ascending.append(sort_order_2 == "Ascending")
+        _append_sort("sort_by_2", sort_by_2, sort_order_2 == "Ascending")
 
     if sort_by_3 != "None" and sort_by_3 != sort_by_1 and sort_by_3 != sort_by_2:
-        if sort_by_3 == "Location Priority" and "Location Priority" in filtered_df.columns:
-            sort_columns.append("Location Priority")
-            sort_ascending.append(sort_order_3 == "Ascending")
-        elif sort_by_3 == "Fit Score":
-            if "Fit score enum" in filtered_df.columns:
-                sort_columns.append("Fit score enum")
-                sort_ascending.append(sort_order_3 == "Ascending")
-            elif "Fit score" in filtered_df.columns:
-                sort_columns.append("Fit score")
-                sort_ascending.append(sort_order_3 == "Ascending")
-        elif sort_by_3 == "Company":
-            sort_columns.append("Company Name")
-            sort_ascending.append(sort_order_3 == "Ascending")
-        elif sort_by_3 == "Location":
-            sort_columns.append("Location")
-            sort_ascending.append(sort_order_3 == "Ascending")
+        _append_sort("sort_by_3", sort_by_3, sort_order_3 == "Ascending")
 
     if sort_columns:
-        filtered_df = filtered_df.sort_values(sort_columns, ascending=sort_ascending)
+        filtered_df = filtered_df.sort_values(sort_columns, ascending=sort_ascending, na_position="last")
+        drop_cols = [col for col in sort_columns if col.startswith("_sort_")]
+        if drop_cols:
+            filtered_df = filtered_df.drop(columns=drop_cols)
 
     visible_jobs_list = []
     for row_idx, row in enumerate(filtered_df.itertuples(index=False)):
@@ -390,6 +438,7 @@ def render_jobs_view() -> None:
         tuple(selections["selected_resume_raw"]),
         tuple(selections["selected_cl_raw"]),
         tuple(selections["selected_expired_raw"]),
+        tuple(selections.get("selected_bad_analysis_raw") or []),
         tuple(selections.get("selected_sustainable_raw") or []),
         selections["selected_jd_data"],
         selections["selected_co_data"],
@@ -423,6 +472,7 @@ def render_jobs_view() -> None:
 
     selected_applied = selections["selected_applied"]
     selected_expired = selections["selected_expired"]
+    selected_bad_analysis = selections.get("selected_bad_analysis") or []
     selected_sustainable = selections.get("selected_sustainable") or []
 
     for _display_idx, (original_row_idx, row) in enumerate(paginated_jobs_list):
@@ -431,6 +481,7 @@ def render_jobs_view() -> None:
         job_key = f"{job_url_key}|{company_key}|{original_row_idx}"
 
         fit_score = _get(row, "Fit score", "") or "Unknown"
+        jd_fit_score = format_jd_fit_score(_get(row, "JD fit score", ""))
         company = _get(row, "Company Name", "N/A")
         job_title = _get(row, "Job Title", "N/A")
         location = _get(row, "Location", "N/A")
@@ -440,6 +491,7 @@ def render_jobs_view() -> None:
         company_overview = _get(row, "Company overview", "")
         sustainable = _get(row, "Sustainable company", "")
         job_analysis = _get(row, "Job analysis", "")
+        jd_fit_reasoning = _get(row, "JD fit reasoning", "")
         has_bad_analysis = _get(row, "Bad analysis", "") == "TRUE"
         job_description = _get(row, "Job Description", "")
         has_job_description = bool(job_description.strip() if job_description else False)
@@ -462,6 +514,8 @@ def render_jobs_view() -> None:
         title_parts = [f"{color} {company} - {job_title}"]
         if location:
             title_parts.append(f"📍 {location}")
+        if jd_fit_score:
+            title_parts.append(f"📊 JD fit {jd_fit_score}/10")
         if fit_score and fit_score != "Unknown":
             title_parts.append(f"⭐ {fit_score}")
         # FALSE due only to missing CO is shown as Missing CO, not "Not Sustainable"
@@ -486,10 +540,20 @@ def render_jobs_view() -> None:
         if check_sustainability_enabled and missing_co:
             title_parts.append("⚠️ Missing CO")
 
+        date_added_label = format_date_added(_get(row, "Date added", ""))
+        expander_label = " | ".join(title_parts)
+        if date_added_label:
+            st.markdown(
+                f'<div class="jab-job-date-anchor" aria-hidden="true">'
+                f'<span>{html.escape(date_added_label)}</span></div>',
+                unsafe_allow_html=True,
+            )
         # Show "Apply" at top only when fit is at least moderate; otherwise same fields live in Job details
         show_apply_at_top = fit_score in ("Moderate fit", "Good fit", "Very good fit")
         expanded = job_key == st.session_state.get("expanded_job_row")
-        with st.expander(" | ".join(title_parts), expanded=expanded):
+        with st.expander(expander_label, expanded=expanded):
+            if jd_fit_score and not (fit_score and fit_score != "Unknown"):
+                st.caption(f"JD-only fit: **{jd_fit_score}/10**" + (f" — {jd_fit_reasoning}" if jd_fit_reasoning else ""))
             if show_apply_at_top:
                 st.subheader("🔗 Apply")
                 if job_url:
@@ -631,16 +695,36 @@ def render_jobs_view() -> None:
                         key=cl_edit_key,
                         disabled=False,
                     )
-                    if st.button("💾 Save Cover Letter", key=f"save_cl_{job_key}"):
-                        st.session_state.expanded_job_row = job_key
-                        st.session_state.last_refresh = time.time()
-                        handle_field_update(
-                            job_url_key,
-                            company_key,
-                            "Tailored cover letter (to be humanized)",
-                            st.session_state.get(cl_edit_key, ""),
-                            cover_letter,
-                            "✅ Cover letter saved",
+                    _cl_body = st.session_state.get(cl_edit_key, "")
+                    _cl_exportable = bool(_cl_body.strip())
+                    # Narrow column group + default button sizes (same as other dashboard saves).
+                    cl_save_col, cl_pdf_col = st.columns(2, gap="xsmall", width=380)
+                    with cl_save_col:
+                        if st.button("💾 Save Cover Letter", key=f"save_cl_{job_key}"):
+                            st.session_state.expanded_job_row = job_key
+                            st.session_state.last_refresh = time.time()
+                            handle_field_update(
+                                job_url_key,
+                                company_key,
+                                "Tailored cover letter (to be humanized)",
+                                st.session_state.get(cl_edit_key, ""),
+                                cover_letter,
+                                "✅ Cover letter saved",
+                            )
+                    with cl_pdf_col:
+                        _pdf_name = safe_cover_letter_pdf_filename(company, job_title)
+                        _pdf_bytes = (
+                            cover_letter_text_to_pdf_bytes(_cl_body)
+                            if _cl_exportable
+                            else cover_letter_text_to_pdf_bytes(" ")
+                        )
+                        st.download_button(
+                            label="📄 Download as PDF",
+                            data=_pdf_bytes,
+                            file_name=_pdf_name,
+                            mime="application/pdf",
+                            disabled=not _cl_exportable,
+                            key=f"download_cl_pdf_{job_key}",
                         )
                     current_cl_feedback = _get(row, "CL feedback", "")
                     cf_key = f"cl_feedback_{job_key}"
@@ -775,7 +859,7 @@ def render_jobs_view() -> None:
                             company,
                             job_title,
                             "TRUE" if has_bad_analysis else "FALSE",
-                            [],  # Bad analysis filter removed; accept all values
+                            selected_bad_analysis,
                         ),
                     )
 
@@ -964,100 +1048,5 @@ def render_jobs_view() -> None:
                     use_container_width=True,
                 )
 
-    # Undo popup
-    if st.session_state.undo_stack and st.session_state.undo_stack_timestamp is not None:
-        elapsed_time = time.time() - st.session_state.undo_stack_timestamp
-        if elapsed_time >= UNDO_POPUP_TIMEOUT:
-            st.session_state.undo_stack.clear()
-            st.session_state.undo_stack_timestamp = None
-            st.rerun()
-
     if st.session_state.undo_stack:
-        job_key, field_name, old_value, job_url_key, company_key, company, job_title = (
-            st.session_state.undo_stack[-1]
-        )
-        field_display = {
-            "Applied": "Applied",
-            "Job posting expired": "Expired",
-            "Bad analysis": "Bad Analysis",
-            "Sustainable company": "Sustainable",
-        }.get(field_name, field_name)
-        remaining_time = UNDO_POPUP_TIMEOUT
-        if st.session_state.undo_stack_timestamp is not None:
-            elapsed = time.time() - st.session_state.undo_stack_timestamp
-            remaining_time = max(0, UNDO_POPUP_TIMEOUT - elapsed)
-
-        with st.container():
-            st.markdown('<div class="undo-marker-unique"></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="undo-text">ℹ️ Job hidden</div>', unsafe_allow_html=True)
-            st.markdown(
-                f'<div class="undo-subtext"><b>{company}</b> - {job_title}<br/>Marked as {field_display}</div>',
-                unsafe_allow_html=True,
-            )
-            st.button("↩️ Undo", key="undo_button_fixed", on_click=handle_undo, use_container_width=True)
-
-            auto_hide_button_key = f"undo_auto_hide_{int(st.session_state.undo_stack_timestamp or 0)}"
-
-            def clear_undo_on_timeout():
-                if st.session_state.undo_stack:
-                    st.session_state.undo_stack.clear()
-                    st.session_state.undo_stack_timestamp = None
-
-            with st.container():
-                st.button(
-                    "",
-                    key=auto_hide_button_key,
-                    on_click=clear_undo_on_timeout,
-                    help="",
-                    use_container_width=False,
-                )
-                st.markdown(
-                    f"""
-                    <style>
-                    div[data-testid="stVerticalBlock"]:has(button[data-testid*="{auto_hide_button_key}"]) {{
-                        display: none !important;
-                    }}
-                    button[data-testid*="{auto_hide_button_key}"] {{
-                        display: none !important;
-                        visibility: hidden !important;
-                        position: absolute !important;
-                        left: -9999px !important;
-                        width: 0 !important;
-                        height: 0 !important;
-                        padding: 0 !important;
-                        margin: 0 !important;
-                    }}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                st.components.v1.html(
-                    f"""
-                <script>
-                (function() {{
-                    const timeoutMs = {int(remaining_time * 1000)};
-                    const buttonKey = '{auto_hide_button_key}';
-                    setTimeout(function() {{
-                        let triggered = false;
-                        const allButtons = document.querySelectorAll('button');
-                        for (let btn of allButtons) {{
-                            const testId = btn.getAttribute('data-testid') || '';
-                            if (testId.includes(buttonKey)) {{
-                                btn.click();
-                                triggered = true;
-                                break;
-                            }}
-                        }}
-                        if (!triggered && window.parent) {{
-                            try {{
-                                window.parent.postMessage({{ type: 'streamlit:rerun' }}, '*');
-                                triggered = true;
-                            }} catch(e) {{}}
-                        }}
-                        if (!triggered) {{ window.location.reload(); }}
-                    }}, timeoutMs);
-                }})();
-                </script>
-                """,
-                    height=0,
-                )
+        _render_undo_toast()

@@ -24,6 +24,7 @@ from .parsing import (
 
 from .apify_client import (
     APIFY_AVAILABLE,
+    apify_jobs_search_is_cached,
     apify_state,
     fetch_job_details_bulk_via_apify,
     fetch_jobs_via_apify,
@@ -77,6 +78,7 @@ __all__ = [
     'normalize_company_name',
     'parse_location',
     'APIFY_AVAILABLE',
+    'apify_jobs_search_is_cached',
     'apify_state',
     'fetch_job_details_bulk_via_apify',
     'fetch_jobs_via_apify',

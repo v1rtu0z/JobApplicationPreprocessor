@@ -20,11 +20,15 @@ Create a `.env` file in the project root with the following keys:
 *   `GEMINI_API_KEY`: Your Google AI Studio API key.
 *   `BACKUP_GEMINI_API_KEY`: (Optional) A backup Gemini API key for rate limit fallback.
 *   `GEMINI_MODEL`: The Gemini model to use (default: `gemini-2.0-flash`).
+*   `GEMINI_RPM`: (Optional) Max Gemini requests per minute; default 4. Free tier is typically 5 RPM; use 4 to stay under.
+*   `GEMINI_RPD`: (Optional) Max Gemini requests per day (rolling 24h); default 20. Free tier is typically 25 RPD.
 *   `APIFY_API_TOKEN`: Your Apify API token.
-*   `SERVER_URL`: The URL for the CV rendering server.
+*   `SERVER_URL`: The URL for the CV rendering server (cover letter and tailor-resume). Job analysis runs locally in batches.
 *   `API_KEY`: The API key for the CV rendering server authentication.
 *   `CHECK_SUSTAINABILITY`: Set to `true` or `false` to toggle sustainability analysis.
 *   `CRAWL_LINKEDIN`: Set to `false` if you are primarily using Apify for job collection.
+
+**Gemini API and rate limiting:** Job analysis is done locally in batches (one API call per several jobs) to reduce usage. Cover letter and resume tailoring still use the server (`SERVER_URL`). All Gemini-backed work (local batch analysis, sustainability checks, search-parameter generation, bulk filtering, and server requests for CL/resume) goes through a single rate limiter. Set `GEMINI_RPM` and `GEMINI_RPD` to match your quota (e.g. 4 and 20 for free tier) so the app stays under limits.
 
 #### 3. Local Storage
 The project uses local SQLite storage for job data. All job information is stored in `local_data/jobs.db`. The directory structure is created automatically on first run:

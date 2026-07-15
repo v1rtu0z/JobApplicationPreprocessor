@@ -1,86 +1,119 @@
 """Single-job and batch job analysis (fit score via LLM)."""
 
 import utils
-from utils import parse_fit_score, fit_score_to_enum, html_to_markdown
-from api_methods import get_job_analysis
+from utils import fit_score_to_enum
+from utils.gemini_analysis import analyze_jobs_batch
+from utils.gemini_throttle import acquire_gemini_slot
 from config import _get_job_filters
 
-from .constants import CHECK_SUSTAINABILITY
-from .filtering import get_sustainability_keyword_matches
+from .constants import ANALYSIS_BATCH_SIZE, CHECK_SUSTAINABILITY
+from .filtering import check_and_process_filters, get_sustainability_keyword_matches
 from .resumes import process_cover_letter, process_resume
 
+# In-memory cache: (job_url, company_name, jd_hash) -> {fit_score, reasoning}
+_analysis_cache: dict[tuple, dict] = {}
 
-def analyze_single_job(db, row, resume_json) -> str | None:
-    """Analyze a single job and update the database. Returns fit score if performed, None if skipped."""
-    if row.get('Fit score') and row.get('Bad analysis', '').strip() != 'TRUE':
-        return row.get('Fit score')
 
+def _analysis_cache_key(row) -> tuple:
+    """Cache key for avoiding re-analysis of the same job."""
+    jd = (row.get('Job Description') or '').strip()
+    return (
+        (row.get('Job URL') or '').strip(),
+        (row.get('Company Name') or '').strip(),
+        hash(jd),
+    )
+
+
+def _apply_analysis_result(db, row, fit_score: str, reasoning: str, resume_json, filters) -> None:
+    """Write analysis to DB and trigger resume/CL for Very good fit."""
     job_title = row.get('Job Title', '')
     company_name = row.get('Company Name', '')
     job_url = row.get('Job URL', '')
+    _, _, sust_matches = get_sustainability_keyword_matches(
+        job_title, company_name,
+        row.get('Location') or '',
+        row.get('Company overview') or '',
+        filters,
+    )
+    updates = {
+        'Fit score': fit_score,
+        'Fit score enum': str(fit_score_to_enum(fit_score)),
+        'Job analysis': reasoning,
+        'Sustainability keyword matches': sust_matches or '',
+    }
+    if row.get('Bad analysis', '').strip() == 'TRUE':
+        updates['Bad analysis'] = 'FALSE'
+    db.update_job_by_key(job_url, company_name, updates)
 
-    print(f"Analyzing: {job_title} @ {company_name}")
+    if fit_score == 'Very good fit':
+        print("\n" + "*" * 60)
+        print("🌟 GREAT FIT DETECTED! 🌟")
+        print(f"Job: {job_title} @ {company_name}")
+        print("Immediately processing resume and cover letter...")
+        print("*" * 60 + "\n")
+        try:
+            process_cover_letter(db, row, resume_json)
+            process_resume(db, row, resume_json)
+            # Re-fetch by key (not row["_id"], which get_all_records() strips) so we see the
+            # resume/CL url written above, not the stale pre-generation snapshot.
+            refreshed = next(
+                (
+                    j for j in db.get_all_jobs()
+                    if j.get('Job URL') == job_url and j.get('Company Name') == company_name
+                ),
+                row,
+            )
+            from utils.telegram_bot import application_is_ready
 
-    job_details = {
-        'company_name': company_name,
-        'job_title': job_title,
+            if refreshed and application_is_ready(refreshed):
+                from pipeline.telegram_notify import process_telegram_notifications
+
+                process_telegram_notifications(db)
+            else:
+                print(
+                    f"Very good fit for {job_title} @ {company_name}: "
+                    "deferring Telegram until resume and cover letter are ready."
+                )
+        except Exception as e:
+            print(f"Error immediately processing Very good fit job: {e}")
+    elif fit_score in ['Good fit', 'Moderate fit']:
+        print(f"Found a {fit_score}: {job_title} @ {company_name}")
+    print(f"Added analysis for: {job_title} @ {company_name}")
+
+
+def _job_details_from_row(row) -> dict:
+    """Build job_details dict from a DB row for batch analysis."""
+    return {
+        'company_name': row.get('Company Name', ''),
+        'job_title': row.get('Job Title', ''),
         'job_description': row.get('Job Description', ''),
         'location': row.get('Location', ''),
         'company_overview': row.get('Company overview', ''),
     }
 
-    try:
-        job_analysis = get_job_analysis(resume_json, job_details)
-        fit_score = parse_fit_score(job_analysis)
 
-        filters = _get_job_filters()
-        _, _, sust_matches = get_sustainability_keyword_matches(
-            job_title, company_name, row.get('Location') or '', row.get('Company overview') or '', filters
-        )
-        updates = {
-            'Fit score': fit_score,
-            'Fit score enum': str(fit_score_to_enum(fit_score)),
-            'Job analysis': html_to_markdown(job_analysis),
-            'Sustainability keyword matches': sust_matches or '',
-        }
-        if row.get('Bad analysis', '').strip() == 'TRUE':
-            updates['Bad analysis'] = 'FALSE'
-        db.update_job_by_key(job_url, company_name, updates)
+def _row_key(row) -> str:
+    """Canonical job_id for matching batch results to rows: Title @ Company."""
+    return f"{row.get('Job Title', '')} @ {row.get('Company Name', '')}"
 
-        if fit_score == 'Very good fit':
-            print("\n" + "*" * 60)
-            print("🌟 GREAT FIT DETECTED! 🌟")
-            print(f"Job: {job_title} @ {company_name}")
-            print("Immediately processing resume and cover letter...")
-            print("*" * 60 + "\n")
-            try:
-                process_cover_letter(db, row, resume_json)
-                process_resume(db, row, resume_json)
-            except Exception as e:
-                print(f"Error immediately processing Very good fit job: {e}")
-        elif fit_score in ['Good fit', 'Moderate fit']:
-            print(f"Found a {fit_score}: {job_title} @ {company_name}")
 
-        print(f"Added analysis for: {job_title} @ {company_name}")
-        return fit_score
-
-    except Exception as e:
-        error_message = str(e)
-        if '429' in error_message or 'Rate limit' in error_message or 'ResourceExhausted' in error_message:
-            utils.mark_gemini_rate_limit_hit()
-            print(f"Gemini rate limit hit for job analysis: {row.get('Job Title')} @ {row.get('Company Name')}. Will retry after short wait.")
-            return None
+def _log_analysing(row, *, cached: bool = False) -> None:
+    """Stdout line for activity.log / dashboard (British spelling matches historical logs)."""
+    jt = (row.get("Job Title") or "").strip() or "?"
+    cn = (row.get("Company Name") or "").strip() or "?"
+    suffix = " (cached)" if cached else ""
+    print(f"Analysing {jt} @ {cn}{suffix}")
 
 
 def analyze_all_jobs(db, resume_json, target_jobs=None):
-    """Analyze all jobs that don't have a fit score yet. Returns number analyzed."""
+    """Analyze all jobs that don't have a fit score yet, in batches. Returns number analyzed."""
     print("\n" + "=" * 60)
-    print("ANALYSIS LOOP: Analyzing all unprocessed jobs")
+    print("ANALYSIS LOOP: Analyzing all unprocessed jobs (batch)")
     print("=" * 60 + "\n")
+    if target_jobs is not None:
+        print(f"Scoped to dashboard default filter ({len(target_jobs)} jobs).\n")
 
     all_rows = db.get_all_records()
-    analyzed_count = 0
-    consecutive_analysis_failure_count = 0
     skipped_reasons = {}
     skipped_example = {}
     breakdown = {}
@@ -126,21 +159,20 @@ def analyze_all_jobs(db, resume_json, target_jobs=None):
                 return False
         return True
 
-    to_analyze = sum(1 for row in all_rows if _would_analyze(row))
-    total = len([r for r in all_rows if r.get('Job Title')])
-    print(f"Jobs about to be analyzed: {to_analyze} (of {total} job rows in db)\n")
-
+    # Collect rows to analyze and record skips for reporting
+    to_analyze_rows: list[tuple] = []  # (row, job_details)
+    analyzed_count = 0
+    filters = _get_job_filters()
     for row in all_rows:
         if not row.get('Job Title'):
-            break
+            continue
 
         job_url = row.get('Job URL', '').strip()
         company_name = row.get('Company Name', '').strip()
-        job_title = row.get('Job Title', '').strip()
+        if target_jobs is not None and (job_url, company_name) not in target_jobs:
+            continue
 
-        if target_jobs is not None:
-            if (job_url, company_name) not in target_jobs:
-                continue
+        job_title = row.get('Job Title', '').strip()
 
         if row.get('Job posting expired') == 'TRUE':
             _record_skip("Job posting expired", company_name, job_title)
@@ -154,7 +186,19 @@ def analyze_all_jobs(db, resume_json, target_jobs=None):
             _record_skip("Missing Company overview", company_name, job_title, row_for_breakdown=row)
             continue
 
-        # Re-analyze when user marked analysis as bad (ignore existing fit score)
+        filter_result = check_and_process_filters(
+            job_title,
+            company_name,
+            row.get('Location', ''),
+            row.get('Company overview', ''),
+            row.get('Job Description', ''),
+            db=db,
+        )
+        if filter_result.filtered:
+            db.update_job_by_key(job_url, company_name, filter_result.row_updates(""))
+            _record_skip(f"Keyword filter: {filter_result.analysis_reason}", company_name, job_title)
+            continue
+
         bad_analysis = row.get('Bad analysis', '').strip() == 'TRUE'
         if not bad_analysis:
             fit_score_val = (row.get('Fit score') or '').strip()
@@ -164,12 +208,10 @@ def analyze_all_jobs(db, resume_json, target_jobs=None):
             if fit_score_val in ['Good fit', 'Very good fit'] or fit_score_val:
                 continue
 
-        # Primary exclusion: already-applied jobs hidden from default view
         if row.get('Applied') == 'TRUE':
             _record_skip("Already applied", company_name, job_title)
             continue
 
-        # Sustainability gate: skip unless company is validated (LLM runs in sustainability validation phase first).
         if CHECK_SUSTAINABILITY:
             sustainable_val = row.get('Sustainable company', '').strip().upper()
             if sustainable_val == 'FALSE':
@@ -179,15 +221,54 @@ def analyze_all_jobs(db, resume_json, target_jobs=None):
                 _record_skip("Sustainability pending (missing overview or not yet validated)", company_name, job_title)
                 continue
 
-        fit_score = analyze_single_job(db, row, resume_json)
-        if fit_score:
+        cache_key = _analysis_cache_key(row)
+        if cache_key in _analysis_cache:
+            cached = _analysis_cache[cache_key]
+            _log_analysing(row, cached=True)
+            _apply_analysis_result(db, row, cached['fit_score'], cached['reasoning'], resume_json, filters)
             analyzed_count += 1
-            consecutive_analysis_failure_count = 0
-        else:
-            consecutive_analysis_failure_count += 1
-            if consecutive_analysis_failure_count >= 5:
-                print(f"Skipping further analysis due to {consecutive_analysis_failure_count} consecutive analysis failures.")
+            continue
+
+        to_analyze_rows.append((row, _job_details_from_row(row)))
+
+    total = len([r for r in all_rows if r.get('Job Title')])
+    print(f"Jobs about to be analyzed: {len(to_analyze_rows)} (of {total} job rows in db)\n")
+
+    consecutive_batch_failures = 0
+    for batch_start in range(0, len(to_analyze_rows), ANALYSIS_BATCH_SIZE):
+        batch = to_analyze_rows[batch_start:batch_start + ANALYSIS_BATCH_SIZE]
+        rows_batch = [r for r, _ in batch]
+        job_details_batch = [j for _, j in batch]
+
+        for row in rows_batch:
+            _log_analysing(row)
+
+        acquire_gemini_slot()
+        batch_results = analyze_jobs_batch(resume_json, job_details_batch)
+
+        if not batch_results:
+            consecutive_batch_failures += 1
+            if consecutive_batch_failures >= 5:
+                print("Skipping further analysis due to 5 consecutive batch failures (e.g. rate limit).")
                 break
+            continue
+
+        consecutive_batch_failures = 0
+        result_by_id = {r['job_id']: r for r in batch_results}
+
+        for row, job_details in batch:
+            job_id = _row_key(row)
+            res = result_by_id.get(job_id)
+            if not res:
+                continue
+
+            fit_score = res['fit_score']
+            reasoning = res.get('reasoning') or 'No reasoning provided'
+
+            _apply_analysis_result(db, row, fit_score, reasoning, resume_json, filters)
+            cache_key = _analysis_cache_key(row)
+            _analysis_cache[cache_key] = {'fit_score': fit_score, 'reasoning': reasoning}
+            analyzed_count += 1
 
     REPORT_ORDER = [
         "Company marked unsustainable (Sustainable=FALSE)",

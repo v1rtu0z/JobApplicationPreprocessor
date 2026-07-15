@@ -690,7 +690,7 @@ def fetch_job_descriptions_via_crawling(
         print(f"    JD crawling complete: {len(successful)} successful, {len(expired)} expired, {len(failed)} failed")
 
     if failed:
-        print(f"    [!] WARNING: {len(failed)} jobs could not be crawled - will try Apify fallback if batch is large enough")
+        print(f"    [!] WARNING: {len(failed)} jobs could not be crawled - will try Apify fallback when available")
 
     return successful, expired, failed
 

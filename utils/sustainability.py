@@ -9,11 +9,13 @@ from config import _get_job_filters
 
 from .apify_client import rate_limit
 from .gemini_rate_limit import mark_gemini_rate_limit_hit
+from .gemini_throttle import acquire_gemini_slot
 from .parsing import fit_score_to_enum, normalize_company_name
 
 
 def _call_gemini_for_sustainability(prompt: str, key_name_context: str = "") -> dict | None:
     """Common logic for calling Gemini API with fallback for sustainability checks."""
+    acquire_gemini_slot()
     api_keys = [
         ('primary', os.getenv("GEMINI_API_KEY")),
         ('backup', os.getenv("BACKUP_GEMINI_API_KEY"))
@@ -31,7 +33,6 @@ def _call_gemini_for_sustainability(prompt: str, key_name_context: str = "") -> 
         try:
             client = genai.Client(api_key=api_key)
 
-            rate_limit()
             model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
             response = client.models.generate_content(
                 model=model_name,
@@ -88,6 +89,35 @@ def get_sustainability_from_sheet(company_name: str, db, cache: dict = None) -> 
     return cache.get(company_key)
 
 
+def _strip_company_suffix(name: str) -> str:
+    """Normalize and drop common legal suffixes for bulk API name matching."""
+    normalized = normalize_company_name(name)
+    for suffix in (
+        " incorporated", " inc.", " inc", " ltd.", " ltd", " llc", " corp.", " corp",
+        " gmbh", " sa", " plc", " co.", " co",
+    ):
+        if normalized.endswith(suffix):
+            return normalized[: -len(suffix)].strip(" ,.")
+    return normalized
+
+
+def _resolve_bulk_sustainability_result(company_name: str, batch_results: dict) -> dict | None:
+    """Match a DB company name to a bulk Gemini response key."""
+    if company_name in batch_results:
+        return batch_results[company_name]
+
+    keyed = {normalize_company_name(key): value for key, value in batch_results.items()}
+    company_key = normalize_company_name(company_name)
+    if company_key in keyed:
+        return keyed[company_key]
+
+    stripped = _strip_company_suffix(company_name)
+    for key, value in batch_results.items():
+        if _strip_company_suffix(key) == stripped:
+            return value
+    return None
+
+
 def is_sustainable_company_bulk(companies_data: list[dict], db=None) -> dict[str, dict]:
     """Determine sustainability for multiple companies in bulk."""
     results = {}
@@ -99,8 +129,8 @@ def is_sustainable_company_bulk(companies_data: list[dict], db=None) -> dict[str
     remaining_companies = []
     for data in companies_data:
         name = data['company_name']
-        if sheet and sustainability_cache:
-            cached_result = get_sustainability_from_sheet(name, sheet, cache=sustainability_cache)
+        if db and sustainability_cache:
+            cached_result = get_sustainability_from_sheet(name, db, cache=sustainability_cache)
             if cached_result is not None:
                 results[name] = {
                     'is_sustainable': cached_result == 'TRUE',
@@ -164,8 +194,8 @@ Example:
     if batch_results:
         for data in remaining_companies:
             name = data['company_name']
-            if name in batch_results:
-                res = batch_results[name]
+            res = _resolve_bulk_sustainability_result(name, batch_results)
+            if res is not None:
                 is_sust = res.get('is_sustainable')
                 reason = res.get('reasoning', 'No reasoning provided')
                 results[name] = {
@@ -236,7 +266,15 @@ You must respond with ONLY a JSON object in this exact format:
     result = _call_gemini_for_sustainability(prompt, company_name)
 
     if result:
-        is_sustainable = result.get("is_sustainable", True)
+        if "is_sustainable" not in result:
+            print(f"  ⚠️  Sustainability check: {company_name} -> inconclusive (missing is_sustainable)")
+            return None
+
+        is_sustainable = result.get("is_sustainable")
+        if is_sustainable is None:
+            print(f"  ⚠️  Sustainability check: {company_name} -> inconclusive (null is_sustainable)")
+            return None
+
         reasoning = result.get("reasoning", "No reasoning provided")
 
         if not is_sustainable:
@@ -251,11 +289,13 @@ You must respond with ONLY a JSON object in this exact format:
         return None
 
 
-def validate_sustainability_for_unprocessed_jobs(db):
+def validate_sustainability_for_unprocessed_jobs(db, target_job_keys=None):
     """Process sustainability checks for jobs that have overview but no definitive Sustainable value."""
     print("\n" + "=" * 60)
     print("SUSTAINABILITY VALIDATION: Checking unprocessed companies")
     print("=" * 60 + "\n")
+    if target_job_keys is not None:
+        print(f"Scoped to dashboard default filter ({len(target_job_keys)} jobs).\n")
 
     all_rows = db.get_all_records()
     companies_to_check = []
@@ -263,6 +303,11 @@ def validate_sustainability_for_unprocessed_jobs(db):
 
     for row in all_rows:
         if row.get('Applied') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
+            continue
+
+        job_url = (row.get('Job URL') or '').strip()
+        company_name_row = (row.get('Company Name') or '').strip()
+        if target_job_keys is not None and (job_url, company_name_row) not in target_job_keys:
             continue
 
         # Include companies with Bad analysis jobs so they get validated first, then analysis can run
@@ -317,34 +362,29 @@ def validate_sustainability_for_unprocessed_jobs(db):
                 continue
 
             sustainability_value = 'TRUE' if is_sustainable else 'FALSE'
-            search_name = company_name.strip().lower()
+            company_key = normalize_company_name(company_name)
             bulk_updates = []
 
             for row in all_rows:
-                row_company = row.get('Company Name', '').strip().lower()
+                row_company = row.get('Company Name', '').strip()
                 job_url = row.get('Job URL', '').strip()
 
-                if not job_url:
+                if not job_url or not row_company:
                     continue
 
-                if row_company == search_name:
-                    match = True
-                elif search_name in row_company or row_company in search_name:
-                    match = True
-                else:
-                    match = False
+                if normalize_company_name(row_company) != company_key:
+                    continue
 
-                if match:
-                    updates = {'Sustainable company': sustainability_value}
+                updates = {'Sustainable company': sustainability_value}
 
-                    if not is_sustainable and not row.get('Fit score'):
-                        updates.update({
-                            'Fit score': 'Very poor fit',
-                            'Fit score enum': str(fit_score_to_enum('Very poor fit')),
-                            'Job analysis': f'Unsustainable company: {reasoning}'
-                        })
+                if not is_sustainable and not row.get('Fit score'):
+                    updates.update({
+                        'Fit score': 'Very poor fit',
+                        'Fit score enum': str(fit_score_to_enum('Very poor fit')),
+                        'Job analysis': f'Unsustainable company: {reasoning}'
+                    })
 
-                    bulk_updates.append((job_url, row.get('Company Name', ''), updates))
+                bulk_updates.append((job_url, row.get('Company Name', ''), updates))
 
             if bulk_updates:
                 db.bulk_update_by_key(bulk_updates)

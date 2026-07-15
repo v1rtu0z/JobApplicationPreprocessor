@@ -104,7 +104,7 @@ def validate_jobs_and_fetch_missing_data(driver, db):
 
     for row in all_rows:
         if not row.get('Job Title'):
-            break
+            continue
 
         job_url = row.get('Job URL', '').strip()
         company_name = row.get('Company Name', '').strip()

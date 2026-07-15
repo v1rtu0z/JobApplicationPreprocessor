@@ -2,6 +2,7 @@
 import pandas as pd
 import streamlit as st
 
+from pipeline.dashboard_filter import DEFAULT_EXCLUDED_FIT_SCORES, default_dashboard_mask
 
 JD_FILTER_OPTIONS = ["Unset", "Has", "Missing"]
 
@@ -11,6 +12,7 @@ FILTER_KEYS = (
     "filter_fit_score",
     "filter_applied_status",
     "filter_expired_status",
+    "filter_bad_analysis",
     "filter_sustainable_company",
     "filter_companies",
     "filter_locations",
@@ -27,6 +29,7 @@ def clear_all_filter_keys() -> None:
     st.session_state.filter_fit_score = []
     st.session_state.filter_applied_status = []
     st.session_state.filter_expired_status = []
+    st.session_state.filter_bad_analysis = []
     st.session_state.filter_sustainable_company = []
     st.session_state.filter_companies = []
     st.session_state.filter_locations = []
@@ -43,6 +46,7 @@ def apply_default_filter_keys(cache: dict, check_sustainability_enabled: bool = 
     st.session_state.filter_fit_score = list(cache.get("default_fit_scores", ["Unknown"]))
     st.session_state.filter_applied_status = ["Not Applied", "Unknown"]
     st.session_state.filter_expired_status = ["Active", "Unknown"]
+    st.session_state.filter_bad_analysis = ["No", "Unknown"]
     st.session_state.filter_sustainable_company = (
         ["Yes", "Unknown"] if check_sustainability_enabled else []
     )
@@ -101,10 +105,9 @@ def _build_filter_cache(df: pd.DataFrame) -> None:
     fit_score_options = sorted(
         [s for s in df["Fit score"].dropna().unique().tolist() if s], reverse=True
     )
-    bad_fits = ["Poor fit", "Very poor fit", "Questionable fit"]
-    # Default view excludes poor fits and moderate fit (only Very good / Good fit + Unknown)
-    default_exclude = bad_fits + ["Moderate fit"]
-    default_fit_scores = [s for s in fit_score_options if s not in default_exclude]
+    # Default view excludes the same fit scores as the backend automation scope
+    # (pipeline.dashboard_filter.DEFAULT_EXCLUDED_FIT_SCORES) so counts never silently diverge.
+    default_fit_scores = [s for s in fit_score_options if s not in DEFAULT_EXCLUDED_FIT_SCORES]
     if "Unknown" not in default_fit_scores:
         default_fit_scores.append("Unknown")
     locations = sorted([l for l in df["Location"].dropna().unique().tolist() if l])
@@ -166,6 +169,14 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         key="filter_expired_status",
     )
     selected_expired = normalize_multiselect(selected_expired_raw)
+
+    bad_analysis_options = ["Yes", "No", "Unknown"]
+    selected_bad_analysis_raw = st.sidebar.multiselect(
+        "Bad Analysis",
+        bad_analysis_options,
+        key="filter_bad_analysis",
+    )
+    selected_bad_analysis = normalize_multiselect(selected_bad_analysis_raw)
 
     if check_sustainability_enabled and "Sustainable company" in df.columns:
         selected_sustainable_raw = st.sidebar.multiselect(
@@ -247,6 +258,8 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         "selected_cl_raw": selected_cl_raw,
         "selected_expired": selected_expired,
         "selected_expired_raw": selected_expired_raw,
+        "selected_bad_analysis": selected_bad_analysis,
+        "selected_bad_analysis_raw": selected_bad_analysis_raw,
         "selected_sustainable": selected_sustainable,
         "selected_sustainable_raw": selected_sustainable_raw,
         "selected_jd_data": selected_jd_data,
@@ -266,6 +279,7 @@ def apply_filter_mask(df: pd.DataFrame, selections: dict) -> pd.DataFrame:
     selected_fit_scores = selections["selected_fit_scores"]
     selected_applied = selections["selected_applied"]
     selected_expired = selections["selected_expired"]
+    selected_bad_analysis = selections.get("selected_bad_analysis") or []
     selected_sustainable = selections.get("selected_sustainable") or []
     selected_resume = selections["selected_resume"]
     selected_cl = selections["selected_cl"]
@@ -284,10 +298,19 @@ def apply_filter_mask(df: pd.DataFrame, selections: dict) -> pd.DataFrame:
             )
         else:
             fit_mask = df["Fit score"].isin(selected_fit_scores)
-        # Always show jobs marked Bad analysis so user can re-run or fix
-        if "Bad analysis" in df.columns:
-            fit_mask = fit_mask | (df["Bad analysis"] == "TRUE")
         filter_mask = filter_mask & fit_mask
+
+    if "Bad analysis" in df.columns and selected_bad_analysis:
+        bad_analysis_mask = pd.Series([False] * len(df), index=df.index)
+        if "Yes" in selected_bad_analysis:
+            bad_analysis_mask = bad_analysis_mask | (df["Bad analysis"] == "TRUE")
+        if "No" in selected_bad_analysis:
+            bad_analysis_mask = bad_analysis_mask | (df["Bad analysis"] != "TRUE")
+        if "Unknown" in selected_bad_analysis:
+            bad_analysis_mask = bad_analysis_mask | (
+                df["Bad analysis"].isna() | (df["Bad analysis"] == "")
+            )
+        filter_mask = filter_mask & bad_analysis_mask
 
     if "Applied" in df.columns and selected_applied:
         applied_mask = pd.Series([False] * len(df), index=df.index)

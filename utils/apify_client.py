@@ -7,42 +7,19 @@ from urllib.parse import urlparse, parse_qs
 
 from apify_client import ApifyClient
 
+from .apify_search_cache import (
+    APIFY_SEARCH_CACHE_TTL_DAYS,
+    days_since_fetch,
+    get_cached_fetch_time,
+    mark_apify_search_fetched,
+    search_fingerprint,
+    should_skip_apify_search,
+)
+from .apify_state import ApifyStateManager, apify_state
 from .parsing import normalize_company_name
 
 # Global variable to track last request time (used by rate_limit)
 last_request_time = 0
-
-
-class ApifyStateManager:
-    """Thread-safe manager for Apify availability state with automatic retry logic."""
-
-    def __init__(self):
-        self._available = True
-        self._last_failure_time = None
-        self._retry_delay = 3600  # 1 hour before retrying after failure
-
-    def is_available(self) -> bool:
-        """Check if Apify is currently available."""
-        if not self._available and self._last_failure_time:
-            elapsed = time.time() - self._last_failure_time
-            if elapsed > self._retry_delay:
-                print(f"Apify retry delay ({self._retry_delay}s) elapsed. Allowing retry...")
-                self._available = True
-                self._last_failure_time = None
-        return self._available
-
-    def mark_unavailable(self):
-        """Mark Apify as unavailable due to rate limit or error."""
-        self._available = False
-        self._last_failure_time = time.time()
-
-    def reset(self):
-        """Reset state to available (useful for testing or manual intervention)."""
-        self._available = True
-        self._last_failure_time = None
-
-
-apify_state = ApifyStateManager()
 
 
 class _ApifyAvailableProxy:
@@ -71,66 +48,11 @@ def rate_limit():
     last_request_time = time.time()
 
 
-def get_company_overviews_bulk_via_apify(company_names: list[str]) -> dict[str, str]:
-    """
-    Fetch company overviews in bulk using Apify (up to 1000 companies).
-    """
-    if not company_names:
-        return {}
+def get_company_overviews_bulk_via_apify(companies):
+    """Fetch company overviews via Apify (see utils.apify_company)."""
+    from .apify_company import get_company_overviews_bulk_via_apify as _fetch
 
-    rate_limit()
-    if not APIFY_AVAILABLE:
-        print("Apify is currently unavailable (usage limit reached). Skipping company overview fetch.")
-        return {}
-
-    print(f"Fetching {len(company_names)} company overviews via Apify in bulk...")
-
-    token = os.getenv("APIFY_API_TOKEN")
-    if not token:
-        print("APIFY_API_TOKEN not set. Skipping Apify fetch.")
-        return {}
-
-    client = ApifyClient(token)
-
-    try:
-        run_input = {
-            "identifier": company_names,
-            "maxResults": len(company_names)
-        }
-
-        run = client.actor("apimaestro/linkedin-company-detail").call(run_input=run_input)
-        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
-
-        if not items:
-            print(f"  No company data found on Apify")
-            return {}
-
-        company_map = {}
-        for item in items:
-            company_name = item.get("input_identifier", "")
-            if company_name:
-                company_name = company_name.strip()
-            description = item.get("basic_info", {}).get("description", "")
-            if description:
-                description = description.strip()
-
-            if company_name and description:
-                company_map[company_name] = description
-
-        print(f"Successfully fetched {len(company_map)}/{len(company_names)} company overviews")
-        return company_map
-
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Error in bulk Apify fetch: {error_msg}")
-        if "Monthly usage hard limit exceeded" in error_msg:
-            print("\n" + "!" * 60)
-            print("CRITICAL: APIFY MONTHLY USAGE HARD LIMIT REACHED.")
-            print("No more jobs can be fetched via Apify this month.")
-            print("Disabling Apify for the remainder of this run.")
-            print("!" * 60 + "\n")
-            apify_state.mark_unavailable()
-        return {}
+    return _fetch(companies)
 
 
 def match_job_to_apify_result(job: dict, apify_item: dict) -> bool:
@@ -146,12 +68,7 @@ def match_job_to_apify_result(job: dict, apify_item: dict) -> bool:
     item_company_normalized = normalize_company_name(comp_info.get('name', ''))
     job_company_normalized = normalize_company_name(job.get('company', ''))
 
-    title_matches = (job_title_normalized in item_title or item_title in job_title_normalized)
-    company_matches = (job_company_normalized == item_company_normalized or
-                       job_company_normalized in item_company_normalized or
-                       item_company_normalized in job_company_normalized)
-
-    return title_matches and company_matches
+    return job_title_normalized == item_title and job_company_normalized == item_company_normalized
 
 
 def fetch_job_details_bulk_via_apify(job_ids: list[str]) -> list[dict]:
@@ -189,30 +106,15 @@ def fetch_job_details_bulk_via_apify(job_ids: list[str]) -> list[dict]:
     except Exception as e:
         error_msg = str(e)
         print(f"Error in bulk Apify job detail fetch: {error_msg}")
-        if "Monthly usage hard limit exceeded" in error_msg:
-            print("\n" + "!" * 60)
-            print("CRITICAL: APIFY MONTHLY USAGE HARD LIMIT REACHED.")
-            print("Disabling Apify for the remainder of this run.")
-            print("!" * 60 + "\n")
-            apify_state.mark_unavailable()
+        if ApifyStateManager.is_monthly_limit_error(error_msg):
+            apify_state.handle_error(error_msg)
         return []
 
 
-def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[dict]:
-    """
-    Fetch jobs from LinkedIn via Apify Actor using parameters extracted from search_url OR provided directly.
-    """
-    rate_limit()
-    if not APIFY_AVAILABLE:
-        print("Apify is currently unavailable (usage limit reached). Skipping job fetch.")
-        return []
-
-    token = os.getenv("APIFY_API_TOKEN")
-    if not token:
-        return []
-
+def _build_apify_jobs_run_input(search_url: str = None, params: dict = None) -> dict | None:
+    """Build normalized Apify actor input from search URL or parameter dict."""
     if params:
-        run_input = {
+        return {
             "keywords": params.get('keywords', ''),
             "location": params.get('location', ''),
             "remote": params.get('remote', ''),
@@ -220,9 +122,11 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
             "sort": params.get('sort', 'recent'),
             "date_posted": params.get('date_posted', 'week'),
             "easy_apply": params.get('easy_apply', ''),
-            "limit": params.get('limit', 100)
+            "limit": params.get('limit', 100),
+            "page": params.get('page', 1),
         }
-    elif search_url:
+
+    if search_url:
         parsed_url = urlparse(search_url)
         query_params = parse_qs(parsed_url.query)
 
@@ -257,8 +161,9 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
         date_posted = date_posted_map.get(f_tpr, "")
 
         easy_apply = "true" if 'f_AL' in query_params else ""
+        page = query_params.get('page', ['1'])[0]
 
-        run_input = {
+        return {
             "keywords": keywords,
             "location": location,
             "remote": remote,
@@ -266,18 +171,55 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
             "sort": sort,
             "date_posted": date_posted,
             "easy_apply": easy_apply,
-            "limit": 100
+            "limit": 100,
+            "page": page,
         }
-    else:
+
+    return None
+
+
+def apify_jobs_search_is_cached(search_url: str = None, params: dict = None) -> bool:
+    """Return True when this search query/result page was fetched within the TTL window."""
+    run_input = _build_apify_jobs_run_input(search_url=search_url, params=params)
+    return bool(run_input and should_skip_apify_search(run_input))
+
+
+def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[dict]:
+    """
+    Fetch jobs from LinkedIn via Apify Actor using parameters extracted from search_url OR provided directly.
+    """
+    run_input = _build_apify_jobs_run_input(search_url=search_url, params=params)
+    if not run_input:
         print("Error: Either search_url or params must be provided to fetch_jobs_via_apify")
+        return []
+
+    if should_skip_apify_search(run_input):
+        fetched_at = get_cached_fetch_time(search_fingerprint(run_input))
+        age_days = days_since_fetch(fetched_at) if fetched_at else 0
+        page = run_input.get("page", 1)
+        print(
+            f"Skipping Apify job search (fetched {age_days:.1f} days ago, "
+            f"TTL {APIFY_SEARCH_CACHE_TTL_DAYS} days): "
+            f"keywords='{run_input.get('keywords')}' location='{run_input.get('location')}' page={page}"
+        )
+        return []
+
+    rate_limit()
+    if not APIFY_AVAILABLE:
+        print("Apify is currently unavailable (usage limit reached). Skipping job fetch.")
+        return []
+
+    token = os.getenv("APIFY_API_TOKEN")
+    if not token:
         return []
 
     print(f"Running Apify Actor for keywords: '{run_input.get('keywords')}' in location: '{run_input.get('location')}'")
 
     client = ApifyClient(token)
+    actor_input = {key: value for key, value in run_input.items() if key != "page"}
 
     try:
-        run = client.actor("apimaestro/linkedin-jobs-scraper-api").call(run_input=run_input)
+        run = client.actor("apimaestro/linkedin-jobs-scraper-api").call(run_input=actor_input)
         items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
         if not items:
@@ -290,16 +232,50 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
             except Exception:
                 pass
 
+        if items:
+            mark_apify_search_fetched(run_input)
         print(f"Fetched {len(items)} jobs from Apify.")
         return items
 
     except Exception as e:
         error_msg = str(e)
         print(f"Error running Apify Actor: {error_msg}")
-        if "Monthly usage hard limit exceeded" in error_msg:
-            print("\n" + "!" * 60)
-            print("CRITICAL: APIFY MONTHLY USAGE HARD LIMIT REACHED.")
-            print("Disabling Apify for the remainder of this run.")
-            print("!" * 60 + "\n")
-            apify_state.mark_unavailable()
+        if ApifyStateManager.is_monthly_limit_error(error_msg):
+            apify_state.handle_error(error_msg)
         return []
+
+
+def get_apify_usage_summary() -> dict:
+    """Return current billing-cycle usage from the Apify account API."""
+    token = os.getenv("APIFY_API_TOKEN")
+    if not token:
+        return {}
+    try:
+        client = ApifyClient(token)
+        usage = client.user().monthly_usage()
+        plan = client.user().get().get("plan") or {}
+        return {
+            "total_usd": usage.get("totalUsageCreditsUsdAfterVolumeDiscount", 0),
+            "cycle_start": usage.get("usageCycle", {}).get("startAt"),
+            "cycle_end": usage.get("usageCycle", {}).get("endAt"),
+            "monthly_credits_usd": plan.get("monthlyUsageCreditsUsd"),
+            "max_monthly_usd": plan.get("maxMonthlyUsageUsd"),
+            "plan_tier": plan.get("tier"),
+        }
+    except Exception as exc:
+        print(f"Could not fetch Apify usage: {exc}")
+        return {}
+
+
+def format_apify_usage(summary: dict) -> str:
+    if not summary:
+        return "unavailable"
+    total = summary.get("total_usd", 0)
+    credits = summary.get("monthly_credits_usd")
+    max_usd = summary.get("max_monthly_usd")
+    parts = [f"${total:.4f} used this cycle"]
+    if credits is not None:
+        parts.append(f"${credits}/mo plan credits")
+    if max_usd is not None:
+        parts.append(f"${max_usd} cap")
+    return " | ".join(parts)

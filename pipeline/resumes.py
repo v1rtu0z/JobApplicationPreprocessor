@@ -2,6 +2,8 @@
 
 import utils
 from api_methods import get_tailored_resume, get_tailored_cl
+from utils.gemini_throttle import GeminiThrottleExhausted
+import utils.gemini_rate_limit as gemini_rl
 
 
 def delete_resume_local(resume_path: str):
@@ -43,6 +45,8 @@ def process_cover_letter(db, row, resume_json) -> bool:
             db.update_job_by_key(job_url, company_name, updates)
             print(f"Regenerated cover letter for: {job_title}")
             return True
+        except GeminiThrottleExhausted:
+            raise
         except Exception as e:
             error_str = str(e)
             if 'Rate limit' in error_str or '429' in error_str:
@@ -65,6 +69,8 @@ def process_cover_letter(db, row, resume_json) -> bool:
             db.update_job_by_key(job_url, company_name, {'Tailored cover letter (to be humanized)': tailored_cl})
             print(f"Generated cover letter for: {job_title}")
             return True
+        except GeminiThrottleExhausted:
+            raise
         except Exception as e:
             error_str = str(e)
             if 'Rate limit' in error_str or '429' in error_str:
@@ -105,6 +111,8 @@ def process_resume(db, row, resume_json) -> bool:
             db.update_job_by_key(job_url, company_name, updates)
             print(f"Regenerated resume for: {job_title}")
             return True
+        except GeminiThrottleExhausted:
+            raise
         except Exception as e:
             error_str = str(e)
             if 'Rate limit' in error_str or '429' in error_str:
@@ -127,6 +135,8 @@ def process_resume(db, row, resume_json) -> bool:
             db.update_job_by_key(job_url, company_name, updates)
             print(f"Generated tailored resume for: {job_title}")
             return True
+        except GeminiThrottleExhausted:
+            raise
         except Exception as e:
             error_str = str(e)
             if 'Rate limit' in error_str or '429' in error_str:
@@ -148,7 +158,7 @@ def process_resumes_and_cover_letters(db, resume_json, target_jobs=None):
 
     for row in all_rows:
         if not row.get('Job Title'):
-            break
+            continue
 
         job_url = row.get('Job URL', '').strip()
         company_name = row.get('Company Name', '').strip()
@@ -180,8 +190,19 @@ def process_resumes_and_cover_letters(db, resume_json, target_jobs=None):
                 db.update_job_by_key(job_url, company_name, updates)
             continue
 
-        cl_done = process_cover_letter(db, row, resume_json)
-        resume_done = process_resume(db, row, resume_json)
+        try:
+            cl_done = process_cover_letter(db, row, resume_json)
+            if gemini_rl.gemini_rate_limit_hit:
+                print("Stopping resume/cover-letter loop: Gemini API rate limit hit.")
+                break
+            resume_done = process_resume(db, row, resume_json)
+            if gemini_rl.gemini_rate_limit_hit:
+                print("Stopping resume/cover-letter loop: Gemini API rate limit hit.")
+                break
+        except GeminiThrottleExhausted as e:
+            print(str(e))
+            utils.mark_gemini_rate_limit_hit()
+            break
         if cl_done or resume_done:
             processed_count += 1
 

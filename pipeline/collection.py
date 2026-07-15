@@ -1,5 +1,7 @@
 """Job collection from LinkedIn/Apify, collection phase orchestration, and new-job pipeline."""
 
+from datetime import datetime, timezone
+
 import utils
 from utils import (
     get_existing_job_keys,
@@ -34,7 +36,9 @@ def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None
     job_description = (normalized.get("job_description") or "").strip()
     if not (job_title and company_name and job_url):
         return None
-    should_skip, _ = _apply_keyword_filters(job_title, company_name, raw_location, filters)
+    should_skip, _ = _apply_keyword_filters(
+        job_title, company_name, raw_location, filters, job_description
+    )
     if should_skip:
         return None
     should_skip_sust, _, _ = _apply_sustainability_keyword_filters(
@@ -44,14 +48,20 @@ def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None
         return None
     clean_location = parse_location(raw_location) if raw_location else ""
     location_priority = get_location_priority(clean_location)
-    row_data = [
-        company_name, job_title, clean_location, str(location_priority),
-        job_description, job_url, "", "", "", "", "FALSE", "FALSE",
-        "", "", "FALSE", "",
-    ]
-    while len(row_data) < len(SHEET_HEADER):
-        row_data.append("")
-    return row_data
+    row = {col: "" for col in SHEET_HEADER}
+    row.update({
+        "Company Name": company_name,
+        "Job Title": job_title,
+        "Location": clean_location,
+        "Location Priority": str(location_priority),
+        "Job Description": job_description,
+        "Job URL": job_url,
+        "CO fetch attempted": "FALSE",
+        "JD crawl attempted": "FALSE",
+        "Bulk filtered": "FALSE",
+        "Date added": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    })
+    return [row[col] for col in SHEET_HEADER]
 
 
 def collect_and_filter_jobs(driver, db, search_urls: list = None):
@@ -153,6 +163,14 @@ def collect_jobs_via_apify(db, search_url=None, params=None):
 
 def process_collection_phase(db, resume_json, shutdown_requested, company_overview_cache=None):
     """Handle job collection from Apify and search parameter generation. Returns (collected_jobs, total_new_jobs, cache)."""
+    from .constants import SKIP_APIFY_COLLECTION
+
+    if SKIP_APIFY_COLLECTION:
+        print("\nSkipping Apify collection phase (SKIP_APIFY_COLLECTION=true).")
+        if company_overview_cache is None:
+            company_overview_cache = _build_company_overview_cache(db)
+        return [], 0, company_overview_cache
+
     if company_overview_cache is None:
         company_overview_cache = _build_company_overview_cache(db)
 
@@ -160,19 +178,26 @@ def process_collection_phase(db, resume_json, shutdown_requested, company_overvi
     llm_params_list = filters.get('search_parameters', [])
     collected_jobs = []
     total_new_jobs = 0
+    any_apify_search_ran = False
 
     if llm_params_list:
         print(f"\nUsing cached search parameters ({len(llm_params_list)} parameter sets).")
         for params in llm_params_list:
             if shutdown_requested['flag']:
                 break
+            if not utils.apify_jobs_search_is_cached(params=params):
+                any_apify_search_ran = True
             new_jobs = collect_jobs_via_apify(db, params=params)
             if new_jobs:
                 collected_jobs.extend(new_jobs)
                 total_new_jobs += len(new_jobs)
                 print(f"Added {len(new_jobs)} new jobs from search: {params.get('keywords', 'N/A')} in {params.get('location', 'N/A')}")
 
-    if (not llm_params_list or total_new_jobs == 0) and not shutdown_requested['flag'] and utils.apify_state.is_available():
+    should_regenerate_params = (
+        not llm_params_list
+        or (total_new_jobs == 0 and any_apify_search_ran)
+    )
+    if should_regenerate_params and not shutdown_requested['flag'] and utils.apify_state.is_available():
         if not llm_params_list:
             print("\nNo cached search parameters found. Generating search parameters from resume...")
         else:
@@ -189,6 +214,8 @@ def process_collection_phase(db, resume_json, shutdown_requested, company_overvi
             for params in llm_params_list:
                 if shutdown_requested['flag']:
                     break
+                if not utils.apify_jobs_search_is_cached(params=params):
+                    any_apify_search_ran = True
                 new_jobs = collect_jobs_via_apify(db, params=params)
                 if new_jobs:
                     collected_jobs.extend(new_jobs)
@@ -240,7 +267,7 @@ def process_linkedin_collection(db, resume_json, company_overview_cache, shutdow
     if jobs_to_scrape:
         progress = True
         validate_jobs_and_fetch_missing_data(driver, db)
-        bulk_filter_collected_jobs(db, resume_json, target_jobs=jobs_to_scrape, force_process=False)
+        bulk_filter_collected_jobs(db, resume_json, target_jobs=jobs_to_scrape, force_process=True)
         if CHECK_SUSTAINABILITY:
             fetch_company_overviews(db, company_overview_cache, target_jobs=jobs_to_scrape)
         analyze_all_jobs(db, resume_json, target_jobs=jobs_to_scrape)

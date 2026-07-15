@@ -75,12 +75,19 @@ class JobDatabase:
 
     def _realign_ids(self, cursor):
         """Re-number all IDs sequentially from 1."""
+        conn = cursor.connection
         columns = ', '.join([f'"{col}"' for col in self.columns])
-        cursor.execute(f"CREATE TEMPORARY TABLE jobs_backup AS SELECT {columns} FROM jobs ORDER BY id")
-        cursor.execute("DELETE FROM jobs")
-        cursor.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
-        cursor.execute(f"INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_backup")
-        cursor.execute("DROP TABLE jobs_backup")
+        try:
+            cursor.execute('BEGIN IMMEDIATE')
+            cursor.execute(f"CREATE TEMPORARY TABLE jobs_backup AS SELECT {columns} FROM jobs ORDER BY id")
+            cursor.execute("DELETE FROM jobs")
+            cursor.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
+            cursor.execute(f"INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_backup")
+            cursor.execute("DROP TABLE jobs_backup")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     
     def get_all_jobs(self) -> list[dict[str, str]]:
         """Get all jobs as a list of dictionaries."""
@@ -273,31 +280,56 @@ class JobDatabase:
         
         conn = self._get_connection()
         cursor = conn.cursor()
-        
-        # Build ORDER BY clause
-        numeric_columns = {'Location Priority', 'Fit score enum'}
-        order_clauses = []
-        
-        for col_name, ascending in sort_specs:
-            direction = 'ASC' if ascending else 'DESC'
-            if col_name in numeric_columns:
-                order_clauses.append(f'CAST(COALESCE("{col_name}", "0") AS INTEGER) {direction}')
-            else:
-                order_clauses.append(f'"{col_name}" {direction}')
-        
-        order_by = ', '.join(order_clauses)
-        columns = ', '.join([f'"{col}"' for col in self.columns])
-        
-        # Re-sort by creating temp table and re-inserting
-        cursor.execute(f'CREATE TEMPORARY TABLE jobs_sorted AS SELECT {columns} FROM jobs ORDER BY {order_by}')
-        cursor.execute('DELETE FROM jobs')
-        cursor.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
-        cursor.execute(f'INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_sorted')
-        cursor.execute('DROP TABLE jobs_sorted')
-        
-        conn.commit()
-        conn.close()
+
+        try:
+            cursor.execute('BEGIN IMMEDIATE')
+
+            # Build ORDER BY clause
+            numeric_columns = {'Location Priority', 'Fit score enum', 'JD fit score'}
+            order_clauses = []
+
+            for col_name, ascending in sort_specs:
+                direction = 'ASC' if ascending else 'DESC'
+                if col_name in numeric_columns:
+                    order_clauses.append(f'CAST(COALESCE("{col_name}", "0") AS INTEGER) {direction}')
+                else:
+                    order_clauses.append(f'"{col_name}" {direction}')
+
+            order_by = ', '.join(order_clauses)
+            columns = ', '.join([f'"{col}"' for col in self.columns])
+
+            # Re-sort by creating temp table and re-inserting
+            cursor.execute(f'CREATE TEMPORARY TABLE jobs_sorted AS SELECT {columns} FROM jobs ORDER BY {order_by}')
+            cursor.execute('DELETE FROM jobs')
+            cursor.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
+            cursor.execute(f'INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_sorted')
+            cursor.execute('DROP TABLE jobs_sorted')
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
     
+    def get_job_by_id(self, job_id: int) -> dict[str, str] | None:
+        """Return a single job by database id, including internal _id."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            columns = ', '.join([f'"{col}"' for col in self.columns])
+            cursor.execute(f'SELECT id, {columns} FROM jobs WHERE id = ?', (job_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            job = {'_id': row[0]}
+            for i, col in enumerate(self.columns):
+                value = row[i + 1]
+                job[col] = str(value) if value is not None else ''
+            return job
+        finally:
+            conn.close()
+
     def get_all_records(self) -> list[dict[str, str]]:
         """Return all jobs as list of dicts (column name -> value), without internal _id."""
         jobs = self.get_all_jobs()

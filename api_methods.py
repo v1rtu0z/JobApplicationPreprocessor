@@ -23,6 +23,7 @@ except ImportError:
     TKINTER_AVAILABLE = False
 
 from utils import get_user_name
+from utils.gemini_throttle import acquire_gemini_slot
 from config import _get_job_filters
 
 load_dotenv()
@@ -36,6 +37,9 @@ RESUME_PDF_PATH = os.getenv("RESUME_PDF_PATH")
 # Constants
 JWT_TOKEN_EXPIRY_SAFETY_MARGIN = 60  # Subtract 60 seconds from token expiry for safety margin
 DEFAULT_TOKEN_EXPIRY_SECONDS = 3600  # Default token expiry if not found in JWT (1 hour)
+API_CONNECT_TIMEOUT_SECONDS = 15
+API_READ_TIMEOUT_SECONDS = 300
+API_REQUEST_TIMEOUT = (API_CONNECT_TIMEOUT_SECONDS, API_READ_TIMEOUT_SECONDS)
 
 # Cache for JWT token and resume JSON
 _jwt_token: Optional[str] = None
@@ -55,7 +59,8 @@ def _authenticate() -> Optional[str]:
         response = requests.post(
             f"{SERVER_URL}/authenticate",
             json={"client_secret": EXTENSION_SECRET_KEY},
-            headers={'Content-Type': 'application/json'}
+            headers={'Content-Type': 'application/json'},
+            timeout=API_REQUEST_TIMEOUT,
         )
 
         if response.status_code == 429:
@@ -121,6 +126,7 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
     Raises:
         Exception: For non-429 errors
     """
+    acquire_gemini_slot()
     keys_to_try = [
         ("primary", GEMINI_API_KEY),
         ("backup", BACKUP_GEMINI_API_KEY)
@@ -135,18 +141,25 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
             current_payload["gemini_api_key"] = current_key
 
             headers = _get_auth_headers()
-            response = requests.post(url, json=current_payload, headers=headers)
+            response = requests.post(
+                url, json=current_payload, headers=headers, timeout=API_REQUEST_TIMEOUT
+            )
 
             # Handle 502 with single retry
             if response.status_code == 502:
                 time.sleep(random.uniform(2, 4))
-                response = requests.post(url, json=current_payload, headers=headers)
+                response = requests.post(
+                    url, json=current_payload, headers=headers, timeout=API_REQUEST_TIMEOUT
+                )
 
             # Handle rate limiting - move to next key
             if response.status_code == 429:
                 print("\n" + "!" * 40)
                 print(f"RATE LIMIT: {key_name} key hit rate limit (429).")
                 print("!" * 40 + "\n")
+                from utils.gemini_rate_limit import mark_gemini_rate_limit_hit
+                mark_gemini_rate_limit_hit()
+                time.sleep(60)  # Brief pause before trying backup key
                 continue  # Try next key
 
             # Handle other HTTP errors
@@ -524,7 +537,11 @@ def get_tailored_cl(resume_json, job_details: dict, current_content: str = None,
         "current_content": current_content,
         "retry_feedback": retry_feedback,
         "resume_json_data": json.dumps(resume_json),
-        "model_name": model_name
+        "model_name": model_name,
+        "cover_letter_format_instructions": (
+            "Do not include a Subject line or personal contact header block. "
+            "Begin the letter directly with: Dear Hiring Team,"
+        ),
     }
 
     data = _make_api_request_with_fallback(
@@ -535,7 +552,9 @@ def get_tailored_cl(resume_json, job_details: dict, current_content: str = None,
     if data is None:
         raise Exception("API request failed - skipping this operation")
 
-    return data['content']
+    from utils.cover_letter_format import normalize_cover_letter_body
+
+    return normalize_cover_letter_body(data["content"])
 
 
 def get_search_parameters(resume_json: dict) -> list[dict]:
@@ -544,8 +563,8 @@ def get_search_parameters(resume_json: dict) -> list[dict]:
     Uses Gemini API directly to generate search parameters.
     """
     try:
+        acquire_gemini_slot()
         import google.genai as genai
-        from utils import rate_limit
         
         # Load additional details if they exist
         additional_details = ""
@@ -565,6 +584,14 @@ def get_search_parameters(resume_json: dict) -> list[dict]:
         prompt = f"""Based on the following resume and additional details, generate a list of search parameters for LinkedIn job searches.
 The goal is to find jobs that are a good fit for the user's background and preferences.
 
+IMPORTANT geographic scope:
+- Only search within EMEA (Europe, Middle East, Africa). Prefer concrete countries LinkedIn accepts: Italy, Spain, Germany, Netherlands, Serbia, Croatia, Montenegro, Bosnia and Herzegovina.
+- Include one worldwide-remote search (location: "Worldwide", remote filter on) for global remote roles; post-filters enforce CET/EET-friendly timezones.
+- Do NOT use broad ambiguous locations like plain "Remote" alone (pulls US/APAC); use "Worldwide" for global remote or a specific country.
+- Avoid "European Union" / "European Economic Area" as location strings (LinkedIn often rejects them); use specific countries instead.
+- Do NOT target United Kingdom as a primary search location (UK roles are only kept when globally remote).
+- For Serbia, Croatia, Montenegro, and Bosnia and Herzegovina: always set remote: remote (candidate speaks local languages and prefers remote roles there).
+
 Resume:
 {json.dumps(resume_json, indent=2)}
 
@@ -579,10 +606,8 @@ Return a JSON list of objects. Each object should have:
 - date_posted: string (one of: "month", "week", "day") - default to "week"
 - limit: integer (number of results, default to 100)
 
-Provide 3-5 diverse search queries that cover:
-1. Different job titles/roles the user is qualified for based on their experience
-2. Location preferences mentioned in their resume or additional details
-3. Appropriate experience levels based on their career stage
+Provide 3-5 diverse search queries OR describe a search_matrix with separate keywords and locations lists.
+When using search_matrix, provide distinct keyword strings and location strings; the system expands every keyword across every location automatically.
 
 You must respond with ONLY a JSON array, no other text. Example format:
 [
@@ -621,10 +646,7 @@ You must respond with ONLY a JSON array, no other text. Example format:
             
             try:
                 client = genai.Client(api_key=api_key)
-                
-                # Apply rate limiting
-                rate_limit()
-                
+
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt
@@ -722,6 +744,7 @@ def bulk_filter_jobs(job_titles: list[dict], resume_json: dict, max_retries: int
     Returns:
         Dict containing 'filtered_titles' (list) and 'new_filters' (dict)
     """
+    acquire_gemini_slot()
     import google.genai as genai
 
     user_name_val = get_user_name(resume_json)
@@ -781,13 +804,6 @@ If ALL jobs are good fits, return: {{"filtered_titles": [], "new_filters": {{"jo
             try:
                 # Configure Gemini client
                 client = genai.Client(api_key=api_key)
-
-                # Call Gemini API with rate limiting
-                from utils import rate_limit
-                rate_limit()
-
-                # Calculate tokens (rough estimation)
-                # print(f"  Prompt tokens: {len(prompt) / 4}") 
 
                 response = client.models.generate_content(
                     model=model_name,

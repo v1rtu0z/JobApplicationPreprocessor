@@ -13,3 +13,4 @@ PyJWT
 PyYAML
 streamlit
 pandas
+fpdf2

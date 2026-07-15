@@ -6,6 +6,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 import utils
+from utils.telegram_bot import is_enabled, start_update_listener
 from utils import (
     get_user_name,
     setup_database,
@@ -15,20 +16,32 @@ from utils import (
 from .constants import (
     BASE_SLEEP_INTERVAL_SECONDS,
     CRAWL_LINKEDIN,
+    JD_FIT_IDLE_SLEEP_SECONDS,
+    MANUAL_CO_PROMPT_SLEEP_SECONDS,
     SKIP_JD_FETCH,
+    SKIP_APIFY_COLLECTION,
     CHECK_SUSTAINABILITY,
     GEMINI_RATE_LIMIT_SHORT_WAIT_SECONDS,
 )
 from .logging_dashboard import _setup_log_capture, _launch_dashboard_once
 from .filtering import _build_company_overview_cache
 from .bulk_ops import bulk_filter_collected_jobs, bulk_fetch_missing_job_descriptions, fetch_company_overviews
+from .dashboard_filter import default_dashboard_job_keys
 from .collection import (
     process_collection_phase,
     process_new_jobs_pipeline,
     process_linkedin_collection,
 )
 from .analysis import analyze_all_jobs
+from .jd_fit_scoring import (
+    is_automation_idle,
+    jobs_need_jd_fit_scoring,
+    manual_co_work_pending,
+    score_jobs_by_jd_fit,
+    should_run_jd_only_fit_scoring,
+)
 from .resumes import process_resumes_and_cover_letters
+from .telegram_notify import process_telegram_notifications, process_telegram_manual_co_prompt
 from config import _get_job_filters, _save_job_filters, CONFIG_FILE
 
 
@@ -136,6 +149,12 @@ class SleepController:
         self.base_interval = base_interval_seconds
         self.current_interval = base_interval_seconds
 
+    def _effective_interval(self) -> float:
+        """Use monthly Apify wait when the hard limit is hit; otherwise normal interval."""
+        if utils.apify_state.is_monthly_limited():
+            return max(utils.apify_state.seconds_until_retry(), 60.0)
+        return self.current_interval
+
     def run(
         self,
         has_work: bool,
@@ -145,9 +164,11 @@ class SleepController:
     ) -> float:
         """Maybe sleep (rate-limit short wait or normal/backoff), then return current interval (possibly updated)."""
         time_since_last_check = time.time() - last_check_time
+        effective_interval = self._effective_interval()
+        monthly_limited = utils.apify_state.is_monthly_limited()
         should_sleep = (
             (not has_work or (not progress_made_in_cycle and last_check_time > 0))
-            and time_since_last_check < self.current_interval
+            and time_since_last_check < effective_interval
         )
 
         if not progress_made_in_cycle and utils.gemini_rate_limit.gemini_rate_limit_hit and has_work:
@@ -156,14 +177,20 @@ class SleepController:
             return self.current_interval
 
         if should_sleep:
-            sleep_time = self.current_interval - time_since_last_check
-            if not has_work:
+            sleep_time = effective_interval - time_since_last_check
+            if monthly_limited:
+                from utils.apify_state import format_duration
+                msg = (
+                    f"Apify monthly limit reached. Sleeping until next month "
+                    f"({format_duration(sleep_time)} remaining)..."
+                )
+            elif not has_work:
                 msg = f"All jobs complete. Sleeping for {sleep_time / 60:.1f} minutes until next check..."
             else:
                 msg = f"No progress made. Sleeping for {sleep_time / 60:.1f} minutes to avoid tight loop (exponential backoff: {self.current_interval / 3600:.1f}h)..."
             self._sleep(sleep_time, shutdown_requested, msg)
 
-            if not progress_made_in_cycle and last_check_time > 0:
+            if not progress_made_in_cycle and last_check_time > 0 and not monthly_limited:
                 self.current_interval = min(self.current_interval * 2, 86400)
                 print(f"Exponential backoff: Next sleep interval will be {self.current_interval / 3600:.1f}h")
                 return self.current_interval
@@ -200,9 +227,13 @@ def _run_processing_cycle(db, resume_json, company_overview_cache, shutdown_requ
     if CHECK_SUSTAINABILITY and fetch_company_overviews(db, company_overview_cache) > 0:
         progress_made_in_cycle = True
 
-    collected_jobs, total_new_jobs, _ = process_collection_phase(
-        db, resume_json, shutdown_requested, company_overview_cache
-    )
+    if SKIP_APIFY_COLLECTION:
+        print("\nSkipping Apify collection (SKIP_APIFY_COLLECTION=true).")
+        collected_jobs, total_new_jobs = [], 0
+    else:
+        collected_jobs, total_new_jobs, _ = process_collection_phase(
+            db, resume_json, shutdown_requested, company_overview_cache
+        )
 
     if total_new_jobs > 0:
         progress_made_in_cycle = True
@@ -216,13 +247,17 @@ def _run_processing_cycle(db, resume_json, company_overview_cache, shutdown_requ
     if bulk_filter_collected_jobs(db, resume_json, force_process=True) > 0:
         progress_made_in_cycle = True
 
-    print("\nFinal pass: Processing all pending jobs in the database...")
+    print("\nFinal pass: Processing pending jobs in dashboard default filter...")
+    dashboard_scope = default_dashboard_job_keys(db)
+    print(f"Scoped to {len(dashboard_scope)} jobs (matches dashboard Apply defaults).")
     if CHECK_SUSTAINABILITY:
-        if validate_sustainability_for_unprocessed_jobs(db) > 0:
+        if validate_sustainability_for_unprocessed_jobs(db, target_job_keys=dashboard_scope) > 0:
             progress_made_in_cycle = True
-    if analyze_all_jobs(db, resume_json) > 0:
+    if analyze_all_jobs(db, resume_json, target_jobs=dashboard_scope) > 0:
         progress_made_in_cycle = True
     if process_resumes_and_cover_letters(db, resume_json) > 0:
+        progress_made_in_cycle = True
+    if process_telegram_notifications(db) > 0:
         progress_made_in_cycle = True
 
     print(f"\nCycle summary:")
@@ -236,7 +271,8 @@ def _run_processing_cycle(db, resume_json, company_overview_cache, shutdown_requ
 
     print("\nFinalizing processing cycle...")
     print("\nSorting database by fit score and location priority...")
-    db.sort_by([('Fit score enum', False), ('Location Priority', True)])
+    sort_specs = [('JD fit score', False), ('Fit score enum', False), ('Location Priority', True)]
+    db.sort_by(sort_specs)
 
     from .auto_filter_adjustment import maybe_auto_adjust_filters
     if maybe_auto_adjust_filters(db):
@@ -275,8 +311,61 @@ def main():
 
     _launch_dashboard_once(db, dashboard_launched)
 
+    if is_enabled():
+        start_update_listener(lambda: db)
+        process_telegram_notifications(db)
+
     while not shutdown_requested['flag']:
         try:
+            _launch_dashboard_once(db, dashboard_launched)
+
+            if is_automation_idle(db) and (jobs_need_jd_fit_scoring(db) or manual_co_work_pending(db)):
+                if should_run_jd_only_fit_scoring(db):
+                    scored = score_jobs_by_jd_fit(db, resume_json)
+                    if scored > 0:
+                        db.sort_by([('JD fit score', False), ('Fit score enum', False), ('Location Priority', True)])
+                        progress_made_in_cycle = True
+                        sleep_controller.reset_to_base()
+
+                if jobs_need_jd_fit_scoring(db):
+                    print(
+                        f"\nJD fit scoring still in progress — pausing {JD_FIT_IDLE_SLEEP_SECONDS}s "
+                        "before next batch (skipping full pipeline cycle)."
+                    )
+                    time.sleep(JD_FIT_IDLE_SLEEP_SECONDS)
+                    last_check_time = time.time()
+                    continue
+
+                print("\n" + "!" * 60)
+                if manual_co_work_pending(db):
+                    print("AUTOMATION IDLE: Manual company overview work remains.")
+                    if process_telegram_manual_co_prompt(db):
+                        progress_made_in_cycle = True
+                else:
+                    print("AUTOMATION IDLE: JD fit scoring complete.")
+                print("Keeping application alive (dashboard stays open).")
+                print("!" * 60 + "\n")
+
+                if manual_co_work_pending(db):
+                    sleep_controller._sleep(
+                        MANUAL_CO_PROMPT_SLEEP_SECONDS,
+                        shutdown_requested,
+                        f"Waiting for manual company overviews — checking again in "
+                        f"{MANUAL_CO_PROMPT_SLEEP_SECONDS / 60:.1f} minutes...",
+                    )
+                else:
+                    sleep_controller.run(
+                        has_work=False,
+                        progress_made_in_cycle=progress_made_in_cycle,
+                        last_check_time=last_check_time,
+                        shutdown_requested=shutdown_requested,
+                    )
+                if shutdown_requested['flag']:
+                    break
+                last_check_time = time.time()
+                progress_made_in_cycle = False
+                continue
+
             has_incomplete_jobs = check_incomplete_jobs(db)
             has_pending = has_pending_analysis(db)
             has_work = has_incomplete_jobs or has_pending
@@ -286,6 +375,20 @@ def main():
                 and not utils.apify_state.is_available()
             )
             if nothing_else_to_do:
+                if utils.apify_state.is_monthly_limited():
+                    from utils.apify_state import format_duration
+                    wait = utils.apify_state.seconds_until_retry()
+                    print("\n" + "!" * 60)
+                    print("NOTHING ELSE TO DO: Apify monthly limit reached.")
+                    print(f"Sleeping until next month ({format_duration(wait)} remaining)...")
+                    print("!" * 60 + "\n")
+                    sleep_controller._sleep(
+                        wait,
+                        shutdown_requested,
+                        f"Apify monthly limit — resuming in {format_duration(wait)}...",
+                    )
+                    last_check_time = time.time()
+                    continue
                 print("\n" + "!" * 60)
                 print("NOTHING ELSE TO DO: Apify is unavailable, LinkedIn crawling is disabled, and no pending jobs found.")
                 print("Stopping application.")
@@ -305,8 +408,6 @@ def main():
 
             if has_work:
                 print("Found jobs with missing data or pending analysis. Processing...")
-
-            _launch_dashboard_once(db, dashboard_launched)
 
             print(f"\n{'=' * 60}")
             print(f"Starting new processing cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

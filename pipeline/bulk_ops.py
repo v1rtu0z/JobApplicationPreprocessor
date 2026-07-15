@@ -21,33 +21,13 @@ from .constants import (
     BULK_FILTER_BATCH_SIZE,
     COMPANY_OVERVIEW_BATCH_SIZE,
     CHECK_SUSTAINABILITY,
+    CRAWL_LINKEDIN,
+    SKIP_APIFY_COLLECTION,
 )
+from .dashboard_filter import default_dashboard_job_keys
 
-# Default dashboard filter: same as "Apply defaults" so we only fetch COs for jobs that would be visible.
-DEFAULT_BAD_FIT_SCORES = ("Poor fit", "Very poor fit", "Questionable fit")
-
-
-def _default_filter_job_keys(db) -> set:
-    """Return set of (job_url, company_name) that pass the default dashboard filter."""
-    all_rows = db.get_all_records()
-    keys = set()
-    for row in all_rows:
-        if row.get("Applied") == "TRUE":
-            continue
-        if row.get("Job posting expired") == "TRUE":
-            continue
-        if row.get("Bad analysis") == "TRUE":
-            continue
-        fit = (row.get("Fit score") or "").strip()
-        if fit and fit in DEFAULT_BAD_FIT_SCORES:
-            continue
-        if CHECK_SUSTAINABILITY and (row.get("Sustainable company") or "").strip() == "FALSE":
-            continue
-        job_url = (row.get("Job URL") or "").strip()
-        company_name = (row.get("Company Name") or "").strip()
-        if job_url and company_name:
-            keys.add((job_url, company_name))
-    return keys
+# Backwards-compatible alias
+_default_filter_job_keys = default_dashboard_job_keys
 
 
 def bulk_filter_collected_jobs(db, resume_json, target_jobs=None, force_process=False):
@@ -145,11 +125,7 @@ def bulk_filter_collected_jobs(db, resume_json, target_jobs=None, force_process=
 
         except Exception as e:
             print(f"Error in bulk filtering batch: {e}")
-            for job in batch:
-                try:
-                    db.update_job_by_key(job['job_url'], job['company'], {'Bulk filtered': 'TRUE'})
-                except Exception:
-                    pass
+            print("  Leaving jobs unmarked so bulk filtering can retry on a later cycle.")
 
         if i + batch_size < len(jobs_to_filter):
             time.sleep(random.uniform(2, 4))
@@ -172,9 +148,9 @@ def fetch_company_overviews(db, company_overview_cache, target_jobs=None):
     print("COMPANY OVERVIEW PHASE: Fetching missing company overviews")
     print("=" * 60 + "\n")
 
-    default_filter_keys = _default_filter_job_keys(db)
+    default_filter_keys = default_dashboard_job_keys(db)
     all_rows = db.get_all_records()
-    company_jobs = {}  # company_key -> list of (job_url, company_name); use first company_name as display name
+    company_jobs = {}  # company_key -> list of (job_url, company_name, company_url)
 
     for row in all_rows:
         job_url = row.get('Job URL', '').strip()
@@ -197,9 +173,10 @@ def fetch_company_overviews(db, company_overview_cache, target_jobs=None):
             db.update_job_by_key(job_url, company_name, {'Company overview': company_overview_cache[company_key]})
             continue
 
+        row_company_url = (row.get('Company URL') or '').strip()
         if company_key not in company_jobs:
             company_jobs[company_key] = []
-        company_jobs[company_key].append((job_url, company_name))
+        company_jobs[company_key].append((job_url, company_name, row_company_url))
 
     if not company_jobs:
         return 0
@@ -210,14 +187,13 @@ def fetch_company_overviews(db, company_overview_cache, target_jobs=None):
         key=lambda k: len(company_jobs[k]),
         reverse=True,
     )
-    # Use first occurrence's company name for API/crawl (display name)
-    company_names_ordered = []
+    company_names_ordered: list[tuple[str, str]] = []  # (display_name, company_url)
     seen = set()
     for key in companies_sorted:
-        first_company_name = company_jobs[key][0][1]
+        first_job_url, first_company_name, first_company_url = company_jobs[key][0]
         if first_company_name not in seen:
             seen.add(first_company_name)
-            company_names_ordered.append(first_company_name)
+            company_names_ordered.append((first_company_name, first_company_url))
 
     print(f"Limiting to jobs visible with default dashboard filter ({len(default_filter_keys)} jobs).")
     print(f"Found {len(company_names_ordered)} unique companies missing CO (prioritizing companies with multiple jobs)")
@@ -234,13 +210,13 @@ def fetch_company_overviews(db, company_overview_cache, target_jobs=None):
             return 0
         company_overview_cache[key] = overview
         n = 0
-        for job_url, company in company_jobs[key]:
+        for job_url, company, _company_url in company_jobs[key]:
             db.update_job_by_key(job_url, company, {'Company overview': overview, 'CO fetch attempted': 'TRUE'})
             n += 1
         return n
 
     # 1) Apify first (when available)
-    if utils.apify_state.is_available():
+    if utils.apify_state.is_available() and not SKIP_APIFY_COLLECTION:
         for i in range(0, len(company_names_ordered), COMPANY_OVERVIEW_BATCH_SIZE):
             if not utils.apify_state.is_available():
                 break
@@ -255,13 +231,14 @@ def fetch_company_overviews(db, company_overview_cache, target_jobs=None):
 
     # Companies still missing CO (Apify didn't return for them or we didn't try Apify)
     remaining_after_apify = [
-        c for c in company_names_ordered
-        if normalize_company_name(c) not in company_overview_cache
+        display_name
+        for display_name, _company_url in company_names_ordered
+        if normalize_company_name(display_name) not in company_overview_cache
     ]
 
-    # 2) LinkedIn crawl only when Apify usage is exhausted (backup of last resort)
-    if remaining_after_apify and not utils.apify_state.is_available():
-        print("Apify unavailable (usage exhausted). Using LinkedIn crawl for remaining company overviews.")
+    # 2) LinkedIn crawl for companies Apify did not resolve (when crawling is enabled)
+    if remaining_after_apify and CRAWL_LINKEDIN:
+        print("Using LinkedIn crawl for company overviews Apify did not return.")
         crawl_successful, crawl_failed = fetch_company_overviews_via_crawling(
             remaining_after_apify, headless=True, min_delay=12.0, max_delay=20.0
         )
@@ -271,8 +248,20 @@ def fetch_company_overviews(db, company_overview_cache, target_jobs=None):
         for company_name in crawl_failed:
             key = normalize_company_name(company_name)
             if key in company_jobs:
-                for job_url, company in company_jobs[key]:
+                for job_url, company, _company_url in company_jobs[key]:
                     db.update_job_by_key(job_url, company, {'CO fetch attempted': 'TRUE'})
+        remaining_after_apify = [
+            display_name
+            for display_name, _company_url in company_names_ordered
+            if normalize_company_name(display_name) not in company_overview_cache
+        ]
+
+    for company_name in remaining_after_apify:
+        key = normalize_company_name(company_name)
+        if key not in company_jobs:
+            continue
+        for job_url, company in company_jobs[key]:
+            db.update_job_by_key(job_url, company, {'CO fetch attempted': 'TRUE'})
 
     print(f"\nCompany overview fetching completed. Total fetched: {fetched_count} overviews.")
     return fetched_count
@@ -323,12 +312,16 @@ def bulk_fetch_missing_job_descriptions(db):
         company = (job_data.get('company') or '').strip()
         if not job_url or not company:
             return
-        updates = {'JD crawl attempted': 'TRUE'}
         if result_type == 'success':
-            updates['Job Description'] = job_data['description']
+            db.update_job_by_key(job_url, company, {
+                'Job Description': job_data['description'],
+                'JD crawl attempted': 'TRUE',
+            })
         elif result_type == 'expired':
-            updates['Job posting expired'] = 'TRUE'
-        db.update_job_by_key(job_url, company, updates)
+            db.update_job_by_key(job_url, company, {
+                'Job posting expired': 'TRUE',
+                'JD crawl attempted': 'TRUE',
+            })
 
     try:
         successful, expired, failed = fetch_job_descriptions_via_crawling(
@@ -349,8 +342,7 @@ def bulk_fetch_missing_job_descriptions(db):
         except Exception:
             pass
 
-    APIFY_MIN_BATCH_SIZE = 50
-    if failed and len(failed) >= APIFY_MIN_BATCH_SIZE and utils.APIFY_AVAILABLE:
+    if failed and utils.APIFY_AVAILABLE and not SKIP_APIFY_COLLECTION:
         apify_jobs = []
         for job in failed:
             job_id = extract_job_id(job['job_url'])
@@ -359,6 +351,7 @@ def bulk_fetch_missing_job_descriptions(db):
         if apify_jobs:
             batch_ids = [j['job_id'] for j in apify_jobs]
             fetched_details = utils.fetch_job_details_bulk_via_apify(batch_ids)
+            matched_jobs = set()
             if fetched_details:
                 for item in fetched_details:
                     job_info = item.get('job_info', {})
@@ -367,14 +360,23 @@ def bulk_fetch_missing_job_descriptions(db):
                         continue
                     for job in apify_jobs:
                         if match_job_to_apify_result(job, item):
-                            updates = {'Job Description': desc}
+                            updates = {
+                                'Job Description': desc,
+                                'JD crawl attempted': 'TRUE',
+                            }
                             comp_info = item.get('company_info', {})
                             co_desc = comp_info.get('description', '')
                             if co_desc:
                                 updates['Company overview'] = co_desc
                                 updates['CO fetch attempted'] = 'TRUE'
                             db.update_job_by_key(job['job_url'], job['company'], updates)
+                            matched_jobs.add((job['job_url'], job['company']))
                             total_updated += 1
                             break
+            for job in apify_jobs:
+                key = (job['job_url'], job['company'])
+                if key in matched_jobs:
+                    continue
+                db.update_job_by_key(job['job_url'], job['company'], {'JD crawl attempted': 'TRUE'})
 
     return total_updated
