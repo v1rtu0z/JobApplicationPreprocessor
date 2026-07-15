@@ -17,16 +17,29 @@ def setup_database(user_name: str):
 
 def get_existing_job_keys(job_store) -> set[str]:
     """Get set of existing job keys (job_title @ company_name) from the job store.
+
+    Excludes terminal rows (expired or applied) so reposted listings can be collected again.
     job_store: JobDatabase or any object with get_all_records() returning list of dicts.
     """
     all_rows = job_store.get_all_records()
     existing = set()
     for row in all_rows:
+        if _is_terminal_job_row(row):
+            continue
         job_title = row.get('Job Title', '').strip()
         company_name = row.get('Company Name', '').strip()
         if job_title and company_name:
             existing.add(f"{job_title} @ {company_name}")
     return existing
+
+
+def _is_terminal_job_row(row: dict) -> bool:
+    """True when a job row should not block collection dedup for the same title @ company."""
+    if (row.get('Job posting expired') or '').strip().upper() == 'TRUE':
+        return True
+    if (row.get('Applied') or '').strip().upper() == 'TRUE':
+        return True
+    return False
 
 
 def parse_fit_score(job_analysis: str) -> str:

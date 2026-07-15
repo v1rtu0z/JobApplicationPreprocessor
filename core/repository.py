@@ -37,13 +37,17 @@ class JobRepository:
         return [Job.from_row(r) for r in records]
 
     def get_existing_job_keys(self) -> set[str]:
-        """Return set of 'Job Title @ Company Name' for deduplication."""
+        """Return set of 'Job Title @ Company Name' for deduplication (excludes expired/applied)."""
+        from utils.storage import _is_terminal_job_row
+
         if hasattr(self._store, "get_all_records"):
             rows = self._store.get_all_records()
         else:
             rows = self._store.get_all_jobs()
         keys = set()
         for row in rows:
+            if _is_terminal_job_row(row):
+                continue
             title = (row.get("Job Title") or "").strip()
             company = (row.get("Company Name") or "").strip()
             if title and company:

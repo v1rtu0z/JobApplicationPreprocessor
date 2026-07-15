@@ -235,7 +235,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
       <label for="resume_pdf">Resume (PDF)</label>
       <input type="file" id="resume_pdf" name="resume_pdf" accept=".pdf">
       <label for="additional_details">Additional details (text)</label>
-      <textarea id="additional_details" name="additional_details" placeholder="Career goals, salary expectations, location preferences..."></textarea>
+      <textarea id="additional_details" name="additional_details" placeholder="Career goals, salary expectations, location preferences...">{{ additional_details }}</textarea>
       <p class="hint">Use the button below to generate a structured resume (resume_data.json) from this text. Include your full name, experience, and skills for best results.</p>
       <p>
         <button type="button" id="btn_generate_resume_from_text">Generate resume from text</button>
@@ -367,7 +367,12 @@ def create_app(app_root: Path):
 
     @app.route("/")
     def index():
-        return render_template_string(SETUP_HTML)
+        root = app.config["APP_ROOT"]
+        add_path = root / "additional_details.txt"
+        additional_details = ""
+        if add_path.is_file():
+            additional_details = add_path.read_text(encoding="utf-8", errors="replace")
+        return render_template_string(SETUP_HTML, additional_details=additional_details)
 
     @app.route("/validate", methods=["POST"])
     def validate():
