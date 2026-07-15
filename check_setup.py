@@ -36,7 +36,7 @@ def check_setup():
     if os.path.exists('.env'):
         print("  ✅ .env file found")
         load_dotenv()
-        required_vars = ['EMAIL_ADDRESS', 'GEMINI_API_KEY', 'APIFY_API_TOKEN', 'SERVER_URL', 'API_KEY']
+        required_vars = ['GEMINI_API_KEY', 'APIFY_API_TOKEN', 'SERVER_URL', 'API_KEY']
         for var in required_vars:
             if os.getenv(var):
                 print(f"  ✅ {var} is set")

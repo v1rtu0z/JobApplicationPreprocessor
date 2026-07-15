@@ -15,7 +15,6 @@ To set up the Job Application Preprocessor on a new machine, follow these steps:
 
 #### 2. Configuration (`.env` file)
 Create a `.env` file in the project root with the following keys:
-*   `EMAIL_ADDRESS`: Your email address.
 *   `GEMINI_API_KEY`: Your Google AI Studio API key.
 *   `BACKUP_GEMINI_API_KEY`: (Optional) A backup Gemini API key for rate limit fallback.
 *   `GEMINI_MODEL`: The Gemini model to use (default: `gemini-2.0-flash`).

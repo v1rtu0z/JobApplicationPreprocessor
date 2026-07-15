@@ -104,7 +104,6 @@ def _write_env_file(env_path: Path, merged: dict[str, str]) -> None:
     env_path.parent.mkdir(parents=True, exist_ok=True)
     header = "# Managed by the dashboard Settings page\n"
     preferred_order = [
-        "EMAIL_ADDRESS",
         "APIFY_API_TOKEN",
         "GEMINI_API_KEY",
         "BACKUP_GEMINI_API_KEY",
@@ -219,7 +218,6 @@ def render_settings_view() -> None:
         st.subheader("Environment configuration")
         existing = env_map
 
-        email_existing = existing.get("EMAIL_ADDRESS", "").strip()
         gemini_model_existing = existing.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
         resume_pdf_path_existing = existing.get("RESUME_PDF_PATH", "").strip()
         if not resume_pdf_path_existing:
@@ -230,9 +228,6 @@ def render_settings_view() -> None:
         check_sust_existing = _parse_bool(existing.get("CHECK_SUSTAINABILITY"), default=False)
 
         with st.form("settings_env_form", clear_on_submit=False):
-            st.markdown("### Core")
-            email_address = st.text_input("Email address", value=email_existing)
-
             st.markdown("### Apify")
             apify_token_val = existing.get("APIFY_API_TOKEN", "") or ""
             apify_api_token = st.text_input(
@@ -294,26 +289,22 @@ def render_settings_view() -> None:
 
             submitted = st.form_submit_button("Save .env")
             if submitted:
-                if not email_address.strip():
-                    st.error("Email address cannot be empty.")
-                else:
-                    merged = dict(existing)
-                    merged["EMAIL_ADDRESS"] = email_address.strip()
-                    merged["GEMINI_MODEL"] = gemini_model.strip() or "gemini-2.0-flash"
-                    merged["CHECK_SUSTAINABILITY"] = "true" if check_sustainability else "false"
-                    merged["RESUME_PDF_PATH"] = resume_pdf_path.strip()
-                    if apify_api_token.strip():
-                        merged["APIFY_API_TOKEN"] = apify_api_token.strip()
-                    if gemini_api_key.strip():
-                        merged["GEMINI_API_KEY"] = gemini_api_key.strip()
-                    if backup_gemini_api_key.strip():
-                        merged["BACKUP_GEMINI_API_KEY"] = backup_gemini_api_key.strip()
-                    if telegram_bot_token.strip():
-                        merged["TELEGRAM_BOT_TOKEN"] = telegram_bot_token.strip()
-                    if telegram_chat_id.strip():
-                        merged["TELEGRAM_CHAT_ID"] = telegram_chat_id.strip()
-                    _write_env_file(env_path, merged)
-                    st.success(f"Saved `{env_path}`. Restart the main app to ensure it reloads env vars.")
+                merged = dict(existing)
+                merged["GEMINI_MODEL"] = gemini_model.strip() or "gemini-2.0-flash"
+                merged["CHECK_SUSTAINABILITY"] = "true" if check_sustainability else "false"
+                merged["RESUME_PDF_PATH"] = resume_pdf_path.strip()
+                if apify_api_token.strip():
+                    merged["APIFY_API_TOKEN"] = apify_api_token.strip()
+                if gemini_api_key.strip():
+                    merged["GEMINI_API_KEY"] = gemini_api_key.strip()
+                if backup_gemini_api_key.strip():
+                    merged["BACKUP_GEMINI_API_KEY"] = backup_gemini_api_key.strip()
+                if telegram_bot_token.strip():
+                    merged["TELEGRAM_BOT_TOKEN"] = telegram_bot_token.strip()
+                if telegram_chat_id.strip():
+                    merged["TELEGRAM_CHAT_ID"] = telegram_chat_id.strip()
+                _write_env_file(env_path, merged)
+                st.success(f"Saved `{env_path}`. Restart the main app to ensure it reloads env vars.")
 
         st.divider()
         st.subheader("Files (from setup)")
