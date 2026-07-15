@@ -1,5 +1,5 @@
 """
-Utils package: schema, parsing, Apify client, LinkedIn crawling, sustainability, storage.
+Utils package: schema, parsing, Apify client, sustainability, storage.
 Re-exports all public names for backward compatibility with `from utils import ...` and `import utils`.
 """
 
@@ -33,22 +33,6 @@ from .apify_client import (
     rate_limit,
 )
 
-from .linkedin_crawl import (
-    _check_job_expired,
-    _extract_job_description,
-    _setup_linkedin_driver,
-    check_job_expiration,
-    fetch_company_overview_via_crawling,
-    fetch_company_overviews_via_crawling,
-    fetch_job_description_via_crawling,
-    fetch_job_descriptions_via_crawling,
-    parse_job_url,
-    random_scroll,
-    retry_on_selenium_error,
-    scrape_multiple_pages,
-    scrape_search_results,
-)
-
 from .sustainability import (
     get_sustainability_from_sheet,
     is_sustainable_company,
@@ -60,7 +44,6 @@ from .storage import (
     get_existing_job_keys,
     parse_fit_score,
     setup_database,
-    setup_driver,
     update_cell,
 )
 
@@ -85,19 +68,6 @@ __all__ = [
     'get_company_overviews_bulk_via_apify',
     'match_job_to_apify_result',
     'rate_limit',
-    '_check_job_expired',
-    '_extract_job_description',
-    '_setup_linkedin_driver',
-    'check_job_expiration',
-    'fetch_company_overview_via_crawling',
-    'fetch_company_overviews_via_crawling',
-    'fetch_job_description_via_crawling',
-    'fetch_job_descriptions_via_crawling',
-    'parse_job_url',
-    'random_scroll',
-    'retry_on_selenium_error',
-    'scrape_multiple_pages',
-    'scrape_search_results',
     'get_sustainability_from_sheet',
     'is_sustainable_company',
     'is_sustainable_company_bulk',
@@ -105,6 +75,5 @@ __all__ = [
     'get_existing_job_keys',
     'parse_fit_score',
     'setup_database',
-    'setup_driver',
     'update_cell',
 ]

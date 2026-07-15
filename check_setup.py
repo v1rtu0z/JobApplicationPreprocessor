@@ -13,8 +13,6 @@ def check_setup():
         ('apify_client', 'apify-client'),
         ('google.genai', 'google-genai'),
         ('html2text', 'html2text'),
-        ('linkedin_scraper', 'linkedin-scraper'),
-        ('selenium', 'selenium'),
         ('dotenv', 'python-dotenv'),
         ('streamlit', 'streamlit'),
         ('pandas', 'pandas'),

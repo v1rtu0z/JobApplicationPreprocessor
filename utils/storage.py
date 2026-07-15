@@ -2,17 +2,7 @@
 
 from pathlib import Path
 
-from .linkedin_crawl import check_job_expiration
 from .schema import SHEET_HEADER
-
-
-def setup_driver():
-    """Initialize and return a headless Chrome driver"""
-    from selenium.webdriver.chrome.options import Options
-    from selenium import webdriver
-
-    options = Options()
-    return webdriver.Chrome(options=options)
 
 
 def setup_database(user_name: str):

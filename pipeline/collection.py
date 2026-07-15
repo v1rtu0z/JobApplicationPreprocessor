@@ -1,4 +1,4 @@
-"""Job collection from LinkedIn/Apify, collection phase orchestration, and new-job pipeline."""
+"""Job collection from Apify, collection phase orchestration, and new-job pipeline."""
 
 from datetime import datetime, timezone
 
@@ -7,14 +7,13 @@ from utils import (
     get_existing_job_keys,
     parse_location,
     get_location_priority,
-    setup_driver,
     SHEET_HEADER,
 )
 from config import _get_job_filters, _save_job_filters, CONFIG_FILE
 from api_methods import get_search_parameters
-from core import ApifyDataSource, LinkedInDataSource
+from core import ApifyDataSource
 
-from .constants import CHECK_SUSTAINABILITY, email_address, linkedin_password
+from .constants import CHECK_SUSTAINABILITY
 from .filtering import (
     _apply_keyword_filters,
     _apply_sustainability_keyword_filters,
@@ -24,7 +23,6 @@ from .filtering import (
 from .bulk_ops import bulk_filter_collected_jobs, fetch_company_overviews
 from .analysis import analyze_all_jobs
 from .resumes import process_resumes_and_cover_letters
-from .validation import validate_jobs_and_fetch_missing_data
 
 
 def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None:
@@ -62,52 +60,6 @@ def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None
         "Date added": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     })
     return [row[col] for col in SHEET_HEADER]
-
-
-def collect_and_filter_jobs(driver, db, search_urls: list = None):
-    """Collect jobs from LinkedIn search URLs via LinkedInDataSource, apply filters, add to DB. Returns list of (job_url, company_name)."""
-    if not search_urls:
-        print("No search URLs provided for LinkedIn crawling.")
-        return []
-
-    print("\n" + "=" * 60)
-    print("COLLECTION PHASE: Gathering all jobs from search URLs")
-    print("=" * 60 + "\n")
-
-    existing_jobs = get_existing_job_keys(db)
-    filters = _get_job_filters()
-    new_rows = []
-    jobs_to_scrape = []
-    source = LinkedInDataSource()
-
-    for search_url in search_urls:
-        print(f"Collecting jobs from search URL: {search_url}")
-        count = 0
-        for normalized in source.fetch_jobs(search_url=search_url, driver=driver, max_pages=5):
-            try:
-                job_key = f"{_normalize_job_title(normalized.get('job_title', ''))} @ {(normalized.get('company_name') or '').strip()}"
-                if job_key in existing_jobs:
-                    continue
-                row_data = _normalized_to_row_data(normalized, filters)
-                if not row_data:
-                    continue
-                new_rows.append(row_data)
-                existing_jobs.add(job_key)
-                jobs_to_scrape.append((row_data[5], row_data[0]))  # Job URL, Company Name
-                count += 1
-                print(f"Collected job for detailed scraping: {job_key}")
-            except Exception as e:
-                print(f"Unexpected error collecting job: {e}")
-        print(f"Found {count} job listings")
-
-    if new_rows:
-        db.append_rows(new_rows)
-        print(f"Successfully added {len(new_rows)} jobs.")
-    else:
-        print("No new jobs found via LinkedIn crawl.")
-
-    print(f"\nCollection phase completed. Added {len(new_rows)} new jobs. Total jobs to scrape: {len(jobs_to_scrape)}")
-    return jobs_to_scrape
 
 
 def collect_jobs_via_apify(db, search_url=None, params=None):
@@ -242,35 +194,4 @@ def process_new_jobs_pipeline(db, resume_json, collected_jobs, company_overview_
         progress = True
     if process_resumes_and_cover_letters(db, resume_json, target_jobs=collected_jobs) > 0:
         progress = True
-    return progress
-
-
-def process_linkedin_collection(db, resume_json, company_overview_cache, shutdown_requested):
-    """Handle LinkedIn scraping if enabled. Returns True if any progress."""
-    from .constants import CRAWL_LINKEDIN
-    if not CRAWL_LINKEDIN:
-        return False
-
-    from linkedin_scraper import actions
-
-    driver = setup_driver()
-    actions.login(driver, email_address, linkedin_password)
-    progress = False
-
-    print("\nChecking for expired job postings...")
-    if validate_jobs_and_fetch_missing_data(driver, db) > 0:
-        progress = True
-
-    print("Collecting jobs from LinkedIn search results...")
-    jobs_to_scrape = collect_and_filter_jobs(driver, db)
-
-    if jobs_to_scrape:
-        progress = True
-        validate_jobs_and_fetch_missing_data(driver, db)
-        bulk_filter_collected_jobs(db, resume_json, target_jobs=jobs_to_scrape, force_process=True)
-        if CHECK_SUSTAINABILITY:
-            fetch_company_overviews(db, company_overview_cache, target_jobs=jobs_to_scrape)
-        analyze_all_jobs(db, resume_json, target_jobs=jobs_to_scrape)
-        process_resumes_and_cover_letters(db, resume_json, target_jobs=jobs_to_scrape)
-
     return progress

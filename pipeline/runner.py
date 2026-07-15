@@ -15,12 +15,11 @@ from utils import (
 
 from .constants import (
     BASE_SLEEP_INTERVAL_SECONDS,
-    CRAWL_LINKEDIN,
+    CHECK_SUSTAINABILITY,
     JD_FIT_IDLE_SLEEP_SECONDS,
     MANUAL_CO_PROMPT_SLEEP_SECONDS,
     SKIP_JD_FETCH,
     SKIP_APIFY_COLLECTION,
-    CHECK_SUSTAINABILITY,
     GEMINI_RATE_LIMIT_SHORT_WAIT_SECONDS,
 )
 from .logging_dashboard import _setup_log_capture, _launch_dashboard_once
@@ -30,7 +29,6 @@ from .dashboard_filter import default_dashboard_job_keys
 from .collection import (
     process_collection_phase,
     process_new_jobs_pipeline,
-    process_linkedin_collection,
 )
 from .analysis import analyze_all_jobs
 from .jd_fit_scoring import (
@@ -101,13 +99,20 @@ def check_incomplete_jobs(db) -> bool:
     for row in all_rows:
         if not row.get('Job Title') or row.get('Applied') == 'TRUE' or row.get('Bad analysis') == 'TRUE' or row.get('Job posting expired') == 'TRUE':
             continue
-        needs_jd = not row.get('Job Description') and CRAWL_LINKEDIN
+        needs_jd = (
+            not SKIP_JD_FETCH
+            and not row.get('Job Description')
+            and not SKIP_APIFY_COLLECTION
+            and utils.apify_state.is_available()
+        )
         needs_co = (
             CHECK_SUSTAINABILITY
             and not row.get('Company overview')
             and utils.apify_state.is_available()
         )
-        can_get_jd = row.get('Job Description') or CRAWL_LINKEDIN
+        can_get_jd = row.get('Job Description') or (
+            not SKIP_JD_FETCH and not SKIP_APIFY_COLLECTION and utils.apify_state.is_available()
+        )
         can_get_co = (
             row.get('Company overview')
             or (utils.apify_state.is_available() if CHECK_SUSTAINABILITY else True)
@@ -263,9 +268,6 @@ def _run_processing_cycle(db, resume_json, company_overview_cache, shutdown_requ
     print(f"\nCycle summary:")
     print(f" - New jobs collected: {len(collected_jobs)}")
 
-    if process_linkedin_collection(db, resume_json, company_overview_cache, shutdown_requested):
-        progress_made_in_cycle = True
-
     if not progress_made_in_cycle:
         print("\nUseless cycle (no progress made).")
 
@@ -371,7 +373,6 @@ def main():
             has_work = has_incomplete_jobs or has_pending
             nothing_else_to_do = (
                 not has_work
-                and not CRAWL_LINKEDIN
                 and not utils.apify_state.is_available()
             )
             if nothing_else_to_do:
@@ -390,7 +391,7 @@ def main():
                     last_check_time = time.time()
                     continue
                 print("\n" + "!" * 60)
-                print("NOTHING ELSE TO DO: Apify is unavailable, LinkedIn crawling is disabled, and no pending jobs found.")
+                print("NOTHING ELSE TO DO: Apify is unavailable and no pending jobs found.")
                 print("Stopping application.")
                 print("!" * 60 + "\n")
                 shutdown_requested['flag'] = True

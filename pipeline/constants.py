@@ -22,9 +22,7 @@ JD_FIT_IDLE_SLEEP_SECONDS = 15
 # Env
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 email_address = os.getenv("EMAIL_ADDRESS")
-linkedin_password = os.getenv("LINKEDIN_PASSWORD")
 CHECK_SUSTAINABILITY = os.getenv("CHECK_SUSTAINABILITY", "false").lower() == "true"
-CRAWL_LINKEDIN = os.getenv("CRAWL_LINKEDIN", "false").lower() == "true"
 SKIP_JD_FETCH = os.getenv("SKIP_JD_FETCH", "false").lower() == "true"
 SKIP_APIFY_COLLECTION = os.getenv("SKIP_APIFY_COLLECTION", "false").lower() == "true"
 

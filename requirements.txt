@@ -4,8 +4,6 @@ python-dotenv
 google-genai
 html2text
 apify-client
-linkedin-scraper
-selenium
 httpcore
 PyPDF2
 pdfminer.six

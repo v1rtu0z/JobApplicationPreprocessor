@@ -8,7 +8,6 @@ from utils.jd_fit import parse_jd_fit_score
 
 from .constants import (
     CHECK_SUSTAINABILITY,
-    CRAWL_LINKEDIN,
     JD_FIT_BATCH_MAX_RETRIES,
     JD_FIT_BATCH_SIZE,
     JD_FIT_MAX_CONSECUTIVE_BATCH_FAILURES,
@@ -84,7 +83,7 @@ def _has_actionable_pipeline_work(db) -> bool:
             continue
 
         if not (row.get('Job Description') or '').strip():
-            if CRAWL_LINKEDIN or utils.apify_state.is_available():
+            if utils.apify_state.is_available():
                 return True
             continue
 
@@ -97,7 +96,7 @@ def _has_actionable_pipeline_work(db) -> bool:
         if CHECK_SUSTAINABILITY and not (row.get('Company overview') or '').strip():
             co_attempted = (row.get('CO fetch attempted') or '').strip().upper() == 'TRUE'
             if not co_attempted:
-                if utils.apify_state.is_available() or CRAWL_LINKEDIN:
+                if utils.apify_state.is_available():
                     return True
 
     return False

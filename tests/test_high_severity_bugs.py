@@ -215,7 +215,7 @@ class TestBulkFilterErrorHandling:
 
 
 class TestJdApifyFallback:
-    def test_small_crawl_failures_use_apify_fallback(self, job_db, monkeypatch):
+    def test_missing_jds_fetched_via_apify(self, job_db, monkeypatch):
         from pipeline.bulk_ops import bulk_fetch_missing_job_descriptions
 
         job_db.add_jobs([
@@ -227,18 +227,11 @@ class TestJdApifyFallback:
             ),
         ])
 
-        crawl_result = ([], [], [{
-            "job_url": "https://www.linkedin.com/jobs/view/1234567890/",
-            "company": "Acme",
-            "title": "Engineer",
-        }])
+        monkeypatch.setattr("pipeline.bulk_ops.utils.apify_state.is_available", lambda: True)
+        monkeypatch.setattr("pipeline.bulk_ops.SKIP_APIFY_COLLECTION", False)
+        monkeypatch.setattr("pipeline.bulk_ops.utils.APIFY_AVAILABLE", True)
         monkeypatch.setattr(
-            "utils.fetch_job_descriptions_via_crawling",
-            lambda *args, **kwargs: crawl_result,
-        )
-        monkeypatch.setattr("utils.APIFY_AVAILABLE", True)
-        monkeypatch.setattr(
-            "utils.fetch_job_details_bulk_via_apify",
+            "pipeline.bulk_ops.utils.fetch_job_details_bulk_via_apify",
             lambda job_ids: [{
                 "job_info": {"title": "Engineer", "description": "Detailed JD from Apify"},
                 "company_info": {"name": "Acme"},
@@ -254,7 +247,7 @@ class TestJdApifyFallback:
 
 
 class TestCompanyOverviewFallback:
-    def test_linkedin_co_fallback_when_apify_misses(self, job_db, monkeypatch):
+    def test_apify_miss_marks_co_fetch_attempted(self, job_db, monkeypatch):
         from pipeline.bulk_ops import fetch_company_overviews
 
         job_db.add_jobs([
@@ -268,20 +261,17 @@ class TestCompanyOverviewFallback:
         ])
 
         monkeypatch.setattr("pipeline.bulk_ops.CHECK_SUSTAINABILITY", True)
-        monkeypatch.setattr("pipeline.bulk_ops.CRAWL_LINKEDIN", True)
         monkeypatch.setattr("utils.apify_client.apify_state.is_available", lambda: True)
         monkeypatch.setattr(
             "pipeline.bulk_ops.get_company_overviews_bulk_via_apify",
             lambda names: {},
         )
-        crawl = Mock(return_value=({"Obscure Startup": "We build climate tech."}, []))
-        monkeypatch.setattr("pipeline.bulk_ops.fetch_company_overviews_via_crawling", crawl)
 
         fetch_company_overviews(job_db, {})
 
-        crawl.assert_called_once()
         row = job_db.get_all_records()[0]
-        assert row["Company overview"] == "We build climate tech."
+        assert row["CO fetch attempted"] == "TRUE"
+        assert not row.get("Company overview")
 
 
 class TestSustainabilityBulkNameMatching:
@@ -300,37 +290,3 @@ class TestSustainabilityBulkNameMatching:
         validate_sustainability_for_unprocessed_jobs(job_db)
 
         assert job_db.get_all_records()[0]["Sustainable company"] == "TRUE"
-
-
-class TestLinkedInBulkFilter:
-    def test_linkedin_collection_bulk_filters_small_batches(self, monkeypatch):
-        captured = {}
-
-        def fake_bulk_filter(db, resume_json, target_jobs=None, force_process=False):
-            captured["force_process"] = force_process
-            captured["target_count"] = len(target_jobs or [])
-            return 0
-
-        jobs = [("https://example.com/1", "Acme")]
-        import pipeline.collection as collection_module
-
-        monkeypatch.setattr("pipeline.constants.CRAWL_LINKEDIN", True)
-        monkeypatch.setattr(collection_module, "setup_driver", lambda: object())
-        monkeypatch.setattr(collection_module, "validate_jobs_and_fetch_missing_data", lambda *args, **kwargs: 0)
-        monkeypatch.setattr(collection_module, "collect_and_filter_jobs", lambda *args, **kwargs: jobs)
-        monkeypatch.setattr(collection_module, "bulk_filter_collected_jobs", fake_bulk_filter)
-        monkeypatch.setattr(collection_module, "fetch_company_overviews", lambda *args, **kwargs: 0)
-        monkeypatch.setattr(collection_module, "analyze_all_jobs", lambda *args, **kwargs: 0)
-        monkeypatch.setattr(collection_module, "process_resumes_and_cover_letters", lambda *args, **kwargs: 0)
-
-        login_mock = Mock()
-        actions_mock = Mock(login=login_mock)
-        monkeypatch.setitem(__import__("sys").modules, "linkedin_scraper", Mock(actions=actions_mock))
-
-        db = Mock()
-        db.get_all_records.return_value = []
-
-        collection_module.process_linkedin_collection(db, {}, {}, {"flag": False})
-
-        assert captured["force_process"] is True
-        assert captured["target_count"] == 1

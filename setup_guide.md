@@ -10,9 +10,8 @@ To set up the Job Application Preprocessor on a new machine, follow these steps:
     ```
     Or manually:
     ```bash
-    pip install flask apify_client google-genai html2text linkedin_scraper selenium python-dotenv streamlit pandas PyYAML PyPDF2 pdfminer.six PyJWT
+    pip install flask apify_client google-genai html2text python-dotenv streamlit pandas PyYAML PyPDF2 pdfminer.six PyJWT
     ```
-*   **Browser & WebDriver**: Install Google Chrome and the corresponding `chromedriver` for Selenium operations (only needed if `CRAWL_LINKEDIN=true`).
 
 #### 2. Configuration (`.env` file)
 Create a `.env` file in the project root with the following keys:
@@ -23,10 +22,12 @@ Create a `.env` file in the project root with the following keys:
 *   `GEMINI_RPM`: (Optional) Max Gemini requests per minute; default 4. Free tier is typically 5 RPM; use 4 to stay under.
 *   `GEMINI_RPD`: (Optional) Max Gemini requests per day (rolling 24h); default 20. Free tier is typically 25 RPD.
 *   `APIFY_API_TOKEN`: Your Apify API token.
-*   `SERVER_URL`: The URL for the CV rendering server (cover letter and tailor-resume). Job analysis runs locally in batches.
-*   `API_KEY`: The API key for the CV rendering server authentication.
+*   `SERVER_URL` and `API_KEY`: Resume/cover-letter server URL and auth secret (set in `.env`; not shown in dashboard settings).
 *   `CHECK_SUSTAINABILITY`: Set to `true` or `false` to toggle sustainability analysis.
-*   `CRAWL_LINKEDIN`: Set to `false` if you are primarily using Apify for job collection.
+*   `TELEGRAM_BOT_TOKEN`: (Optional) Bot token from [@BotFather](https://t.me/BotFather) (`/newbot`) — enables phone notifications when an application is ready.
+*   `TELEGRAM_CHAT_ID`: (Optional) Your numeric Telegram user chat ID. Send `/start` to your bot after the app is running; the bot replies with your ID (use yours, not the bot's). Also stored in `local_data/telegram_chat_id.txt`.
+
+**Telegram setup (optional):** Message @BotFather → `/newbot` → copy token into `TELEGRAM_BOT_TOKEN` → restart the app → open your bot in Telegram → `/start` → copy the chat ID into `TELEGRAM_CHAT_ID` (or rely on the auto-saved file). You can also edit these in the dashboard **Settings → App config (.env)** tab.
 
 **Gemini API and rate limiting:** Job analysis is done locally in batches (one API call per several jobs) to reduce usage. Cover letter and resume tailoring still use the server (`SERVER_URL`). All Gemini-backed work (local batch analysis, sustainability checks, search-parameter generation, bulk filtering, and server requests for CL/resume) goes through a single rate limiter. Set `GEMINI_RPM` and `GEMINI_RPD` to match your quota (e.g. 4 and 20 for free tier) so the app stays under limits.
 

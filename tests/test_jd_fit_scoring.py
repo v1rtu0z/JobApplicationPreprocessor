@@ -39,7 +39,6 @@ class TestJdFitScoringIdleDetection:
 
     def test_should_run_when_automation_idle_and_co_manual_next(self, job_db, monkeypatch):
         monkeypatch.setattr("pipeline.jd_fit_scoring.CHECK_SUSTAINABILITY", True)
-        monkeypatch.setattr("pipeline.jd_fit_scoring.CRAWL_LINKEDIN", False)
         monkeypatch.setattr("utils.apify_client.apify_state.is_available", lambda: False)
         job_db.add_jobs([_job()])
 
@@ -55,7 +54,6 @@ class TestJdFitScoringIdleDetection:
 
     def test_should_not_run_when_co_fetch_still_actionable(self, job_db, monkeypatch):
         monkeypatch.setattr("pipeline.jd_fit_scoring.CHECK_SUSTAINABILITY", True)
-        monkeypatch.setattr("pipeline.jd_fit_scoring.CRAWL_LINKEDIN", False)
         monkeypatch.setattr("utils.apify_client.apify_state.is_available", lambda: True)
         job_db.add_jobs([_job()])
 

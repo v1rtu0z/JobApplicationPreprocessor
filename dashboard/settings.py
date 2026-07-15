@@ -105,16 +105,14 @@ def _write_env_file(env_path: Path, merged: dict[str, str]) -> None:
     header = "# Managed by the dashboard Settings page\n"
     preferred_order = [
         "EMAIL_ADDRESS",
-        "CRAWL_LINKEDIN",
-        "LINKEDIN_PASSWORD",
         "APIFY_API_TOKEN",
-        "SERVER_URL",
-        "API_KEY",
         "GEMINI_API_KEY",
         "BACKUP_GEMINI_API_KEY",
         "GEMINI_MODEL",
         "CHECK_SUSTAINABILITY",
         "RESUME_PDF_PATH",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
     ]
 
     def fmt(k: str, v: str) -> str:
@@ -222,7 +220,6 @@ def render_settings_view() -> None:
         existing = env_map
 
         email_existing = existing.get("EMAIL_ADDRESS", "").strip()
-        server_url_existing = existing.get("SERVER_URL", "").strip()
         gemini_model_existing = existing.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
         resume_pdf_path_existing = existing.get("RESUME_PDF_PATH", "").strip()
         if not resume_pdf_path_existing:
@@ -230,23 +227,11 @@ def render_settings_view() -> None:
             if candidate.exists():
                 resume_pdf_path_existing = str(candidate.resolve())
 
-        crawl_linkedin_existing = _parse_bool(existing.get("CRAWL_LINKEDIN"), default=False)
         check_sust_existing = _parse_bool(existing.get("CHECK_SUSTAINABILITY"), default=False)
 
         with st.form("settings_env_form", clear_on_submit=False):
             st.markdown("### Core")
             email_address = st.text_input("Email address", value=email_existing)
-            server_url = st.text_input("Server URL", value=server_url_existing)
-
-            st.markdown("### LinkedIn")
-            crawl_linkedin = st.checkbox("Enable LinkedIn crawling", value=crawl_linkedin_existing)
-            linkedin_password_val = existing.get("LINKEDIN_PASSWORD", "") or ""
-            linkedin_password = st.text_input(
-                "LinkedIn password",
-                value=linkedin_password_val,
-                type="password",
-                help="Edit to change password.",
-            )
 
             st.markdown("### Apify")
             apify_token_val = existing.get("APIFY_API_TOKEN", "") or ""
@@ -281,17 +266,31 @@ def render_settings_view() -> None:
                 "Sustainability filtering can reduce the number of matches; some high-paying roles may be in industries classified as non-sustainable."
             )
 
+            st.markdown("### Telegram notifications (optional)")
+            st.caption(
+                "Get resume + cover letter packages on your phone when a Good or Very good fit is ready.\n\n"
+                "1. Open Telegram and message **@BotFather** → send `/newbot` → follow the prompts → copy the **bot token**.\n"
+                "2. Paste it below as **Telegram bot token**, save, and **restart the main app**.\n"
+                "3. In Telegram, open a chat with your new bot and send **`/start`**.\n"
+                "4. The bot replies with **your chat ID** (a number). Paste it below — use **your** ID, not the bot's.\n"
+                "   It is also saved to `local_data/telegram_chat_id.txt` if you leave this field empty."
+            )
+            telegram_token_val = existing.get("TELEGRAM_BOT_TOKEN", "") or ""
+            telegram_bot_token = st.text_input(
+                "Telegram bot token",
+                value=telegram_token_val,
+                type="password",
+                help="From @BotFather after /newbot. Required to enable Telegram.",
+            )
+            telegram_chat_val = existing.get("TELEGRAM_CHAT_ID", "") or ""
+            telegram_chat_id = st.text_input(
+                "Telegram chat ID (optional)",
+                value=telegram_chat_val,
+                help="Your numeric user chat ID from the bot's /start reply — not the bot's ID.",
+            )
+
             st.markdown("### Resume")
             resume_pdf_path = st.text_input("RESUME_PDF_PATH", value=resume_pdf_path_existing)
-
-            st.markdown("### Server auth")
-            api_key_val = existing.get("API_KEY", "") or ""
-            api_key = st.text_input(
-                "API key / secret (server auth)",
-                value=api_key_val,
-                type="password",
-                help="Edit to change key.",
-            )
 
             submitted = st.form_submit_button("Save .env")
             if submitted:
@@ -300,21 +299,19 @@ def render_settings_view() -> None:
                 else:
                     merged = dict(existing)
                     merged["EMAIL_ADDRESS"] = email_address.strip()
-                    merged["SERVER_URL"] = server_url.strip()
-                    merged["CRAWL_LINKEDIN"] = "true" if crawl_linkedin else "false"
                     merged["GEMINI_MODEL"] = gemini_model.strip() or "gemini-2.0-flash"
                     merged["CHECK_SUSTAINABILITY"] = "true" if check_sustainability else "false"
                     merged["RESUME_PDF_PATH"] = resume_pdf_path.strip()
-                    if linkedin_password.strip():
-                        merged["LINKEDIN_PASSWORD"] = linkedin_password.strip()
                     if apify_api_token.strip():
                         merged["APIFY_API_TOKEN"] = apify_api_token.strip()
                     if gemini_api_key.strip():
                         merged["GEMINI_API_KEY"] = gemini_api_key.strip()
                     if backup_gemini_api_key.strip():
                         merged["BACKUP_GEMINI_API_KEY"] = backup_gemini_api_key.strip()
-                    if api_key.strip():
-                        merged["API_KEY"] = api_key.strip()
+                    if telegram_bot_token.strip():
+                        merged["TELEGRAM_BOT_TOKEN"] = telegram_bot_token.strip()
+                    if telegram_chat_id.strip():
+                        merged["TELEGRAM_CHAT_ID"] = telegram_chat_id.strip()
                     _write_env_file(env_path, merged)
                     st.success(f"Saved `{env_path}`. Restart the main app to ensure it reloads env vars.")
 
