@@ -315,7 +315,20 @@ def render_settings_view() -> None:
                 "Additional details",
                 value=add_existing,
                 height=180,
-                help="Optional free text used by prompts (goals, constraints, preferences).",
+                placeholder="Full name, roles, skills, salary floor, remote/geo preferences, industries to avoid…",
+                help=(
+                    "Free text used for search-parameter generation and prompt enrichment. "
+                    "Also the source for “Generate resume from text”. Examples: salary floor, "
+                    "EU remote only, industries to avoid, must-have stack."
+                ),
+            )
+            st.caption(
+                f"{len(additional_details)} characters"
+                + (
+                    " — add more before generating a resume from text"
+                    if additional_details.strip() and len(additional_details.strip()) < 20
+                    else ""
+                )
             )
             saved = st.form_submit_button("Save additional details")
             if saved:

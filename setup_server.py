@@ -182,12 +182,17 @@ SETUP_HTML = r"""<!DOCTYPE html>
     button + button { margin-left: 8px; }
     .advanced { margin-top: 16px; }
     .advanced summary { cursor: pointer; color: var(--muted); }
+    .char-count { font-size: 0.85rem; color: var(--muted); margin: 4px 0 0; }
+    .char-count.warn { color: #b45309; }
+    .examples { margin: 8px 0 0; padding-left: 1.2em; color: var(--muted); font-size: 0.9rem; }
+    .examples li { margin: 2px 0; }
+    .next-steps { margin-top: 20px; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); font-size: 0.95rem; color: var(--muted); }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Job Application Preprocessor – Setup</h1>
-    <p class="subtitle">Enter your API keys and optional files. All values stay on your computer.</p>
+    <p class="subtitle">Minimum path: Apify token + Gemini key + either a resume PDF <em>or</em> additional details (then generate resume). Everything stays on your computer.</p>
 
     <section>
       <h2>Apify (LinkedIn job data)</h2>
@@ -227,19 +232,28 @@ SETUP_HTML = r"""<!DOCTYPE html>
     <section>
       <h2>Optional</h2>
       <label><input type="checkbox" name="check_sustainability"> Check company sustainability</label>
-      <p class="hint">If you prioritize financial stability or maximum job options, leave this off — sustainability filtering can reduce matches.</p>
+      <p class="hint">If you prioritize financial stability or maximum job options, leave this off — sustainability filtering can reduce matches. See the same warning in dashboard Settings if you change your mind later.</p>
     </section>
 
     <section>
-      <h2>Files</h2>
+      <h2>Profile</h2>
       <label for="resume_pdf">Resume (PDF)</label>
       <input type="file" id="resume_pdf" name="resume_pdf" accept=".pdf">
+      <p class="hint">Optional if you paste enough additional details below and click <strong>Generate resume from text</strong>.</p>
+
       <label for="additional_details">Additional details (text)</label>
-      <textarea id="additional_details" name="additional_details" placeholder="Career goals, salary expectations, location preferences...">{{ additional_details }}</textarea>
-      <p class="hint">Use the button below to generate a structured resume (resume_data.json) from this text. Include your full name, experience, and skills for best results.</p>
+      <textarea id="additional_details" name="additional_details" placeholder="Full name, roles, skills, salary floor, remote/geo preferences, industries to avoid…">{{ additional_details }}</textarea>
+      <p class="char-count" id="additional_details_count">0 characters</p>
+      <p class="hint">Used for search-parameter generation and to enrich prompts. Also the source for “Generate resume from text” (include your <strong>full name</strong>, experience, and skills — aim for at least a short paragraph).</p>
+      <ul class="examples">
+        <li>Salary floor or currency (e.g. “minimum €70k base”)</li>
+        <li>Location / remote preference (e.g. “EU remote only, no US-only roles”)</li>
+        <li>Industries or employers to avoid</li>
+        <li>Must-have stack (e.g. “Python + data engineering, not frontend-only”)</li>
+      </ul>
       <p>
         <button type="button" id="btn_generate_resume_from_text">Generate resume from text</button>
-        <span class="hint" style="margin-left: 0.5em;">⚠️ This will overwrite resume_data.json if it already exists.</span>
+        <span class="hint" style="margin-left: 0.5em;">⚠️ Overwrites <code>resume_data.json</code> if it already exists.</span>
       </p>
       <label for="job_preferences_file">Job preferences (YAML, optional)</label>
       <input type="file" id="job_preferences_file" name="job_preferences_file" accept=".yaml,.yml">
@@ -249,6 +263,11 @@ SETUP_HTML = r"""<!DOCTYPE html>
     <div id="validate_results"></div>
     <button type="button" id="btn_validate">Validate</button>
     <button type="button" id="btn_save" class="primary">Save configuration</button>
+
+    <div class="next-steps">
+      <strong>After you save:</strong> close this tab → stop the app if it is still waiting (Ctrl+C) → start it again.
+      The dashboard opens when jobs appear; optional Telegram and finer filters live under <strong>Settings</strong>.
+    </div>
 
     <form id="save_form" method="post" action="/save" enctype="multipart/form-data" style="display:none;">
       <input type="hidden" id="f_apify_api_token" name="apify_api_token">
@@ -275,6 +294,17 @@ SETUP_HTML = r"""<!DOCTYPE html>
       });
       document.getElementById('validate_results').innerHTML = html;
     }
+    function updateAdditionalDetailsCount() {
+      var ta = document.getElementById('additional_details');
+      var el = document.getElementById('additional_details_count');
+      if (!ta || !el) return;
+      var n = ta.value.length;
+      el.textContent = n + ' character' + (n === 1 ? '' : 's')
+        + (n > 0 && n < 20 ? ' — add more before generating a resume from text' : '');
+      el.className = 'char-count' + (n > 0 && n < 20 ? ' warn' : '');
+    }
+    document.getElementById('additional_details').addEventListener('input', updateAdditionalDetailsCount);
+    updateAdditionalDetailsCount();
     document.getElementById('btn_generate_resume_from_text').addEventListener('click', function() {
       var text = document.getElementById('additional_details').value.trim();
       if (!text || text.length < 20) {

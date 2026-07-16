@@ -39,7 +39,7 @@ The project uses local SQLite storage for job data. All job information is store
 #### 4. Personalization Files
 Customize these files to tailor the AI's analysis to your profile:
 *   **`resume_data.json`**: Update with your structured education, experience, and skills. This is auto-generated from your PDF resume on first run if `RESUME_PDF_PATH` is set in `.env`.
-*   **`additional_details.txt`**: Add your career goals, salary expectations, location preferences, and any specific constraints.
+*   **`additional_details.txt`**: Career narrative and constraints used in prompts and search generation. Include your full name, experience, and skills if you generate `resume_data.json` from text. Useful examples: salary floor, remote/geo preference, industries to avoid, must-have stack. You can also edit this in the dashboard **Settings → Files** tab.
 *   **`job_preferences.yaml`**: This file is automatically created on the first run using `job_preferences.yaml.example` as a template (or with defaults). You can edit it to customize job title skip keywords, location priorities, sustainability criteria, and cached search parameters. Duplicates are automatically removed when the file is saved.
 
 #### 5. Verify Setup
