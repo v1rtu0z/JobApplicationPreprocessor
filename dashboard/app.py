@@ -46,6 +46,12 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    # Placeholder for the Jobs-only sidebar (filters + stats), created unconditionally and early
+    # so it clears immediately when switching to Activity/Settings. Without this, stale Jobs
+    # sidebar widgets stick around until the whole (slower) Activity/Settings script run finishes,
+    # since Streamlit only prunes elements that were never re-touched once the run completes.
+    sidebar_jobs_slot = st.sidebar.empty()
+
     if view == "Activity":
         render_activity_view()
         return
@@ -63,4 +69,4 @@ def main() -> None:
             return
         st.session_state.df = df
 
-    render_jobs_view()
+    render_jobs_view(sidebar_jobs_slot)

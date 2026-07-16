@@ -61,7 +61,7 @@ Build executables (e.g. PyInstaller) and installers per OS; GitHub Actions for b
 
 ## Recently completed
 
-- **Hide Jobs filters on Activity** – View radio no longer forces `index=0` on every rerun (was resetting to Jobs during Activity auto-refresh and flashing sidebar filters).
+- **Hide Jobs filters on Activity/Settings** – View radio no longer forces `index=0` on every rerun (was resetting to Jobs during Activity auto-refresh and flashing sidebar filters). Jobs sidebar filters/stats now render into an `st.sidebar.empty()` placeholder created early in `app.py`, so switching to Activity/Settings clears them instantly instead of lingering for a second or two until the (slower) other view's script run finishes.
 - **Telegram test message** – Settings → App config: “Send Telegram test message” ping (no dummy job).
 - **USE_LOCAL_STORAGE cleanup** – Toggle already gone from setup/settings/example; Settings `.env` writer strips leftover key.
 - **Editable local LLM prompts** – Settings → Prompts; overrides in `job_preferences.yaml`.

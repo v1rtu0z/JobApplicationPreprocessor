@@ -174,8 +174,15 @@ def _render_undo_toast() -> None:
         )
 
 
-def render_jobs_view() -> None:
-    """Render the Jobs view: data, filters, sorting, pagination, job cards, undo, pager."""
+def render_jobs_view(sidebar_slot=None) -> None:
+    """Render the Jobs view: data, filters, sorting, pagination, job cards, undo, pager.
+
+    sidebar_slot: an st.sidebar.empty() placeholder (see dashboard/app.py) that the filters and
+    stats are rendered into via `.container()`. Using a placeholder created early in main() lets
+    it clear instantly when switching away from Jobs, instead of waiting for a slower view's
+    whole script run to finish before stale sidebar widgets are pruned. Falls back to st.sidebar
+    directly if not provided.
+    """
     _init_jobs_session_state()
 
     def on_checkbox_change(
@@ -277,69 +284,72 @@ def render_jobs_view() -> None:
     check_sustainability_enabled = get_check_sustainability()
 
     ensure_filter_cache(df)
-    selections = render_sidebar_filters(df, check_sustainability_enabled)
-    filtered_df = apply_filter_mask(df, selections)
 
-    # Sidebar stats
-    st.sidebar.divider()
-    st.sidebar.header("📊 Statistics")
-    st.sidebar.metric("Total Jobs", len(filtered_df))
-    automation_scope_count = int(default_dashboard_mask(df).sum())
-    st.sidebar.metric(
-        "🤖 Automation scope",
-        automation_scope_count,
-        help=(
-            "Jobs the backend pipeline and Telegram bot currently treat as in-scope "
-            "(same rule as 'Apply defaults', independent of your current filter selections)."
-        ),
-    )
-    if "Tailored resume url" in filtered_df.columns:
-        with_resumes = len(
-            filtered_df[
-                filtered_df["Tailored resume url"].notna()
-                & (filtered_df["Tailored resume url"] != "")
-            ]
-        )
-        st.sidebar.metric("With Resumes", with_resumes)
-    else:
-        st.sidebar.metric("With Resumes", 0)
-    if "Applied" in filtered_df.columns:
-        applied_count = len(filtered_df[filtered_df["Applied"] == "TRUE"])
-        st.sidebar.metric("Applied", applied_count)
-    else:
-        st.sidebar.metric("Applied", 0)
-    if check_sustainability_enabled and "Sustainable company" in df.columns:
-        st.sidebar.divider()
-        st.sidebar.header("🌱 Sustainability")
-        st.sidebar.metric(
-            "✅ Sustainable",
-            len(filtered_df[filtered_df["Sustainable company"] == "TRUE"]),
-        )
-        st.sidebar.metric(
-            "❌ Not Sustainable",
-            len(filtered_df[filtered_df["Sustainable company"] == "FALSE"]),
-        )
-        st.sidebar.metric(
-            "❓ Unknown",
-            len(
-                filtered_df[
-                    filtered_df["Sustainable company"].isna()
-                    | (filtered_df["Sustainable company"] == "")
-                ]
+    sidebar_ctx = sidebar_slot.container() if sidebar_slot is not None else st.sidebar
+    with sidebar_ctx:
+        selections = render_sidebar_filters(df, check_sustainability_enabled)
+        filtered_df = apply_filter_mask(df, selections)
+
+        # Sidebar stats
+        st.divider()
+        st.header("📊 Statistics")
+        st.metric("Total Jobs", len(filtered_df))
+        automation_scope_count = int(default_dashboard_mask(df).sum())
+        st.metric(
+            "🤖 Automation scope",
+            automation_scope_count,
+            help=(
+                "Jobs the backend pipeline and Telegram bot currently treat as in-scope "
+                "(same rule as 'Apply defaults', independent of your current filter selections)."
             ),
         )
-    if len(filtered_df) > 0:
-        st.sidebar.divider()
-        st.sidebar.header("⭐ Fit Score Breakdown")
-        fit_breakdown = filtered_df["Fit score"].value_counts()
-        for score, count in fit_breakdown.items():
-            if score:
-                st.sidebar.text(f"{score}: {count}")
-        unknown_fit = len(
-            filtered_df[filtered_df["Fit score"].isna() | (filtered_df["Fit score"] == "")]
-        )
-        if unknown_fit > 0:
-            st.sidebar.text(f"Unknown: {unknown_fit}")
+        if "Tailored resume url" in filtered_df.columns:
+            with_resumes = len(
+                filtered_df[
+                    filtered_df["Tailored resume url"].notna()
+                    & (filtered_df["Tailored resume url"] != "")
+                ]
+            )
+            st.metric("With Resumes", with_resumes)
+        else:
+            st.metric("With Resumes", 0)
+        if "Applied" in filtered_df.columns:
+            applied_count = len(filtered_df[filtered_df["Applied"] == "TRUE"])
+            st.metric("Applied", applied_count)
+        else:
+            st.metric("Applied", 0)
+        if check_sustainability_enabled and "Sustainable company" in df.columns:
+            st.divider()
+            st.header("🌱 Sustainability")
+            st.metric(
+                "✅ Sustainable",
+                len(filtered_df[filtered_df["Sustainable company"] == "TRUE"]),
+            )
+            st.metric(
+                "❌ Not Sustainable",
+                len(filtered_df[filtered_df["Sustainable company"] == "FALSE"]),
+            )
+            st.metric(
+                "❓ Unknown",
+                len(
+                    filtered_df[
+                        filtered_df["Sustainable company"].isna()
+                        | (filtered_df["Sustainable company"] == "")
+                    ]
+                ),
+            )
+        if len(filtered_df) > 0:
+            st.divider()
+            st.header("⭐ Fit Score Breakdown")
+            fit_breakdown = filtered_df["Fit score"].value_counts()
+            for score, count in fit_breakdown.items():
+                if score:
+                    st.text(f"{score}: {count}")
+            unknown_fit = len(
+                filtered_df[filtered_df["Fit score"].isna() | (filtered_df["Fit score"] == "")]
+            )
+            if unknown_fit > 0:
+                st.text(f"Unknown: {unknown_fit}")
 
     column_index_map = {col: idx for idx, col in enumerate(filtered_df.columns)}
 

@@ -125,6 +125,11 @@ def _build_filter_cache(df: pd.DataFrame) -> None:
 def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool = False) -> dict:
     """Render sidebar filter widgets and return a dict of selections for apply_filter_mask.
     Sustainable filter and priority checkbox only shown when check_sustainability_enabled (from .env).
+
+    Must be called from within a `with <sidebar placeholder>.container():` block (see
+    dashboard/app.py and render_jobs_view) so these bare st.* calls land in the sidebar via the
+    current-container context rather than st.sidebar directly. That lets the placeholder clear
+    instantly on non-Jobs views instead of waiting for the whole script run to finish.
     """
     cache = st.session_state.filter_options_cache
     fit_score_options = cache["fit_score_options"]
@@ -132,22 +137,22 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     locations = cache["locations"]
     companies = cache["companies"]
 
-    st.sidebar.header("🔍 Filters")
-    clear_col, default_col = st.sidebar.columns(2)
+    st.header("🔍 Filters")
+    clear_col, default_col = st.columns(2)
     with clear_col:
-        if st.sidebar.button("Clear all", key="filter_clear_all", use_container_width=True):
+        if st.button("Clear all", key="filter_clear_all", use_container_width=True):
             clear_all_filter_keys()
             st.rerun()
     with default_col:
-        if st.sidebar.button("Apply defaults", key="filter_apply_defaults", use_container_width=True):
+        if st.button("Apply defaults", key="filter_apply_defaults", use_container_width=True):
             apply_default_filter_keys(cache, check_sustainability_enabled)
             st.rerun()
-    st.sidebar.caption("💡 Tip: Leave multiselect filters empty to show all")
+    st.caption("💡 Tip: Leave multiselect filters empty to show all")
 
     # Use only key= for keyed widgets so Streamlit uses session_state[key] as the value.
     # Passing default= with key= can cause widgets to reset on rerun (e.g. after Refresh or filter change).
     fit_score_options_with_meta = ["Unknown"] + fit_score_options
-    selected_fit_scores_raw = st.sidebar.multiselect(
+    selected_fit_scores_raw = st.multiselect(
         "Fit Score",
         fit_score_options_with_meta,
         key="filter_fit_score",
@@ -155,7 +160,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     selected_fit_scores = normalize_multiselect(selected_fit_scores_raw)
 
     applied_options = ["Applied", "Not Applied", "Unknown"]
-    selected_applied_raw = st.sidebar.multiselect(
+    selected_applied_raw = st.multiselect(
         "Applied Status",
         applied_options,
         key="filter_applied_status",
@@ -163,7 +168,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     selected_applied = normalize_multiselect(selected_applied_raw)
 
     expired_options = ["Active", "Expired", "Unknown"]
-    selected_expired_raw = st.sidebar.multiselect(
+    selected_expired_raw = st.multiselect(
         "Expired Status",
         expired_options,
         key="filter_expired_status",
@@ -171,7 +176,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     selected_expired = normalize_multiselect(selected_expired_raw)
 
     bad_analysis_options = ["Yes", "No", "Unknown"]
-    selected_bad_analysis_raw = st.sidebar.multiselect(
+    selected_bad_analysis_raw = st.multiselect(
         "Bad Analysis",
         bad_analysis_options,
         key="filter_bad_analysis",
@@ -179,7 +184,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     selected_bad_analysis = normalize_multiselect(selected_bad_analysis_raw)
 
     if check_sustainability_enabled and "Sustainable company" in df.columns:
-        selected_sustainable_raw = st.sidebar.multiselect(
+        selected_sustainable_raw = st.multiselect(
             "Sustainable Company",
             ["Yes", "No", "Unknown"],
             key="filter_sustainable_company",
@@ -189,15 +194,15 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         selected_sustainable = []
         selected_sustainable_raw = []
 
-    st.sidebar.divider()
-    st.sidebar.header("⚠️ Data completeness")
-    selected_jd_data = st.sidebar.radio(
+    st.divider()
+    st.header("⚠️ Data completeness")
+    selected_jd_data = st.radio(
         "Job Description",
         JD_FILTER_OPTIONS,
         key="jd_data_filter",
     )
     if check_sustainability_enabled and "Company overview" in df.columns:
-        selected_co_data = st.sidebar.radio(
+        selected_co_data = st.radio(
             "Company Overview",
             JD_FILTER_OPTIONS,
             key="co_data_filter",
@@ -206,33 +211,33 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
         selected_co_data = "Unset"
 
     if check_sustainability_enabled and "Sustainable company" in df.columns:
-        show_priority_only = st.sidebar.checkbox(
+        show_priority_only = st.checkbox(
             "🔴 Show only sustainable jobs missing descriptions",
             key="filter_priority_only",
         )
     else:
         show_priority_only = False
 
-    st.sidebar.divider()
-    st.sidebar.caption("📍 Location & Company Filters")
-    selected_locations_raw = st.sidebar.multiselect(
+    st.divider()
+    st.caption("📍 Location & Company Filters")
+    selected_locations_raw = st.multiselect(
         "Location",
         ["Unknown"] + locations,
         key="filter_locations",
     )
     selected_locations = normalize_multiselect(selected_locations_raw)
 
-    selected_company_raw = st.sidebar.multiselect(
+    selected_company_raw = st.multiselect(
         "Company",
         ["Unknown"] + companies,
         key="filter_companies",
     )
     selected_company = normalize_multiselect(selected_company_raw)
 
-    st.sidebar.divider()
-    st.sidebar.caption("📄 Resume / Cover letter")
+    st.divider()
+    st.caption("📄 Resume / Cover letter")
     has_resume_options = ["Yes", "No", "Unknown"]
-    selected_resume_raw = st.sidebar.multiselect(
+    selected_resume_raw = st.multiselect(
         "Has Resume",
         has_resume_options,
         key="filter_has_resume",
@@ -240,7 +245,7 @@ def render_sidebar_filters(df: pd.DataFrame, check_sustainability_enabled: bool 
     selected_resume = normalize_multiselect(selected_resume_raw)
 
     has_cl_options = ["Yes", "No", "Unknown"]
-    selected_cl_raw = st.sidebar.multiselect(
+    selected_cl_raw = st.multiselect(
         "Has Cover Letter",
         has_cl_options,
         key="filter_has_cover_letter",

@@ -266,29 +266,6 @@ def render_settings_view() -> None:
                 "Sustainability filtering can reduce the number of matches; some high-paying roles may be in industries classified as non-sustainable."
             )
 
-            st.markdown("### Telegram notifications (optional)")
-            st.caption(
-                "Get resume + cover letter packages on your phone when a Good or Very good fit is ready.\n\n"
-                "1. Open Telegram and message **@BotFather** → send `/newbot` → follow the prompts → copy the **bot token**.\n"
-                "2. Paste it below as **Telegram bot token**, save, and **restart the main app**.\n"
-                "3. In Telegram, open a chat with your new bot and send **`/start`**.\n"
-                "4. The bot replies with **your chat ID** (a number). Paste it below — use **your** ID, not the bot's.\n"
-                "   It is also saved to `local_data/telegram_chat_id.txt` if you leave this field empty."
-            )
-            telegram_token_val = existing.get("TELEGRAM_BOT_TOKEN", "") or ""
-            telegram_bot_token = st.text_input(
-                "Telegram bot token",
-                value=telegram_token_val,
-                type="password",
-                help="From @BotFather after /newbot. Required to enable Telegram.",
-            )
-            telegram_chat_val = existing.get("TELEGRAM_CHAT_ID", "") or ""
-            telegram_chat_id = st.text_input(
-                "Telegram chat ID (optional)",
-                value=telegram_chat_val,
-                help="Your numeric user chat ID from the bot's /start reply — not the bot's ID.",
-            )
-
             st.markdown("### Resume")
             resume_pdf_path = st.text_input("RESUME_PDF_PATH", value=resume_pdf_path_existing)
 
@@ -304,18 +281,50 @@ def render_settings_view() -> None:
                     merged["GEMINI_API_KEY"] = gemini_api_key.strip()
                 if backup_gemini_api_key.strip():
                     merged["BACKUP_GEMINI_API_KEY"] = backup_gemini_api_key.strip()
+                _write_env_file(env_path, merged)
+                st.success(f"Saved `{env_path}`. Restart the main app to ensure it reloads env vars.")
+
+        st.divider()
+        st.subheader("Telegram")
+        st.caption(
+            "Get resume + cover letter packages on your phone when a Good or Very good fit is ready.\n\n"
+            "1. Open Telegram and message **@BotFather** → send `/newbot` → follow the prompts → copy the **bot token**.\n"
+            "2. Paste it below as **Telegram bot token**, save, and **restart the main app**.\n"
+            "3. In Telegram, open a chat with your new bot and send **`/start`**.\n"
+            "4. The bot replies with **your chat ID** (a number). Paste it below — use **your** ID, not the bot's.\n"
+            "   It is also saved to `local_data/telegram_chat_id.txt` if you leave this field empty."
+        )
+        telegram_token_val = existing.get("TELEGRAM_BOT_TOKEN", "") or ""
+        telegram_chat_val = existing.get("TELEGRAM_CHAT_ID", "") or ""
+        with st.form("settings_telegram_form", clear_on_submit=False):
+            telegram_bot_token = st.text_input(
+                "Telegram bot token",
+                value=telegram_token_val,
+                type="password",
+                help="From @BotFather after /newbot. Required to enable Telegram.",
+            )
+            telegram_chat_id = st.text_input(
+                "Telegram chat ID (optional)",
+                value=telegram_chat_val,
+                help="Your numeric user chat ID from the bot's /start reply — not the bot's ID.",
+            )
+            telegram_saved = st.form_submit_button("Save Telegram settings")
+            if telegram_saved:
+                merged = dict(_read_env_map(env_path))
                 if telegram_bot_token.strip():
                     merged["TELEGRAM_BOT_TOKEN"] = telegram_bot_token.strip()
                 if telegram_chat_id.strip():
                     merged["TELEGRAM_CHAT_ID"] = telegram_chat_id.strip()
                 _write_env_file(env_path, merged)
-                st.success(f"Saved `{env_path}`. Restart the main app to ensure it reloads env vars.")
+                st.success(
+                    f"Saved Telegram settings to `{env_path}`. "
+                    "Restart the main app so the bot listener reloads."
+                )
+                st.rerun()
 
-        st.markdown("#### Telegram connection test")
         st.caption(
             "Sends a plain text ping using the token/chat ID currently in `.env` "
-            "(save the form above first if you just edited them). "
-            "Does not create a dummy job or touch the jobs database."
+            "(save above first if you just edited them). Does not create a dummy job."
         )
         if st.button("Send Telegram test message", key="settings_telegram_test_send"):
             try:
