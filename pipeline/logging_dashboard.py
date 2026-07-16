@@ -5,31 +5,53 @@ import subprocess
 import sys
 import time
 import webbrowser
+from datetime import datetime
 
 from .constants import ACTIVITY_LOG_PATH, DASHBOARD_LAUNCH_DELAY_SEC, DASHBOARD_URL
 
 
 class _Tee:
-    """Writes to both the original stream and the log file so the dashboard can show activity."""
+    """Writes to both the original stream and the log file so the dashboard can show activity.
+
+    Console output is unchanged. Complete lines written to the activity log are prefixed with a
+    local timestamp so the dashboard Activity view is easier to read.
+    """
 
     def __init__(self, stream, log_file):
         self._stream = stream
         self._file = log_file
+        self._buf = ""
 
     def write(self, data):
         self._stream.write(data)
         self._stream.flush()
-        if self._file is not None:
-            try:
-                self._file.write(data)
-                self._file.flush()
-            except OSError:
-                pass
+        if self._file is None or not data:
+            return
+        try:
+            self._buf += data
+            while True:
+                nl = self._buf.find("\n")
+                if nl < 0:
+                    break
+                line = self._buf[:nl]
+                self._buf = self._buf[nl + 1 :]
+                if line:
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    self._file.write(f"[{ts}] {line}\n")
+                else:
+                    self._file.write("\n")
+            self._file.flush()
+        except OSError:
+            pass
 
     def flush(self):
         self._stream.flush()
         if self._file is not None:
             try:
+                if self._buf:
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    self._file.write(f"[{ts}] {self._buf}")
+                    self._buf = ""
                 self._file.flush()
             except OSError:
                 pass

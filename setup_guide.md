@@ -18,8 +18,8 @@ Create a `.env` file in the project root with the following keys:
 *   `GEMINI_API_KEY`: Your Google AI Studio API key.
 *   `BACKUP_GEMINI_API_KEY`: (Optional) A backup Gemini API key for rate limit fallback.
 *   `GEMINI_MODEL`: The Gemini model to use (default: `gemini-2.0-flash`).
-*   `GEMINI_RPM`: (Optional) Max Gemini requests per minute; default 4. Free tier is typically 5 RPM; use 4 to stay under.
-*   `GEMINI_RPD`: (Optional) Max Gemini requests per day (rolling 24h); default 20. Free tier is typically 25 RPD.
+*   `GEMINI_RPM`: (Optional) Max Gemini requests per minute; default `0` = unlimited. Set a positive value only if you need a local cap (free tier is typically ~5 RPM).
+*   `GEMINI_RPD`: (Optional) Max Gemini requests per day (rolling 24h); default `0` = unlimited. Set a positive value only if you need a local cap (free tier is typically ~25 RPD).
 *   `APIFY_API_TOKEN`: Your Apify API token.
 *   `SERVER_URL` and `API_KEY`: Resume/cover-letter server URL and auth secret (set in `.env`; not shown in dashboard settings).
 *   `CHECK_SUSTAINABILITY`: Set to `true` or `false` to toggle sustainability analysis.
@@ -28,7 +28,7 @@ Create a `.env` file in the project root with the following keys:
 
 **Telegram setup (optional):** Message @BotFather → `/newbot` → copy token into `TELEGRAM_BOT_TOKEN` → restart the app → open your bot in Telegram → `/start` → copy the chat ID into `TELEGRAM_CHAT_ID` (or rely on the auto-saved file). You can also edit these in the dashboard **Settings → App config (.env)** tab.
 
-**Gemini API and rate limiting:** Job analysis is done locally in batches (one API call per several jobs) to reduce usage. Cover letter and resume tailoring still use the server (`SERVER_URL`). All Gemini-backed work (local batch analysis, sustainability checks, search-parameter generation, bulk filtering, and server requests for CL/resume) goes through a single rate limiter. Set `GEMINI_RPM` and `GEMINI_RPD` to match your quota (e.g. 4 and 20 for free tier) so the app stays under limits.
+**Gemini API and rate limiting:** Job analysis is done locally in batches (one API call per several jobs) to reduce usage. Cover letter and resume tailoring still use the server (`SERVER_URL`). All Gemini-backed work goes through an optional local rate gate. By default there is **no local RPM/RPD cap** (the app relies on Google’s API quotas and key fallback). Set `GEMINI_RPM` / `GEMINI_RPD` only if you want an explicit local throttle.
 
 #### 3. Local Storage
 The project uses local SQLite storage for job data. All job information is stored in `local_data/jobs.db`. The directory structure is created automatically on first run:

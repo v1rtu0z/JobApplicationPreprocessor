@@ -8,3 +8,5 @@ job_preferences.yaml
 .vscode
 .venv
 .pytest_cache
+# Local planning docs — keep out of GitHub until ready to publish
+/docs/

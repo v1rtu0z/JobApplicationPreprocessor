@@ -1,12 +1,16 @@
-"""Gemini API rate throttle: RPM and RPD limits, single gate for all Gemini-backed work."""
+"""Gemini API rate throttle: optional RPM/RPD gate for all Gemini-backed work.
+
+By default there is no local cap (RPM/RPD = 0). Set GEMINI_RPM / GEMINI_RPD to
+positive integers only if you need to stay under a specific quota.
+"""
 
 import os
 import time
 from collections import deque
 
-# Defaults for free tier (e.g. 5 RPM / 25 RPD); use slightly lower to be safe
-DEFAULT_GEMINI_RPM = 4
-DEFAULT_GEMINI_RPD = 20
+# 0 = unlimited (no local throttle). Positive values enforce a soft gate.
+DEFAULT_GEMINI_RPM = 0
+DEFAULT_GEMINI_RPD = 0
 WINDOW_MINUTE_SEC = 60
 WINDOW_DAY_SEC = 24 * 3600
 
@@ -14,19 +18,19 @@ _request_timestamps: deque[float] = deque()
 
 
 class GeminiThrottleExhausted(Exception):
-    """Raised when the local RPM/RPD gate cannot admit another request yet."""
+    """Raised when a configured RPD gate cannot admit another request yet."""
 
 
 def _get_rpm_limit() -> int:
     try:
-        return max(1, int(os.getenv("GEMINI_RPM", str(DEFAULT_GEMINI_RPM))))
+        return max(0, int(os.getenv("GEMINI_RPM", str(DEFAULT_GEMINI_RPM))))
     except (TypeError, ValueError):
         return DEFAULT_GEMINI_RPM
 
 
 def _get_rpd_limit() -> int:
     try:
-        return max(1, int(os.getenv("GEMINI_RPD", str(DEFAULT_GEMINI_RPD))))
+        return max(0, int(os.getenv("GEMINI_RPD", str(DEFAULT_GEMINI_RPD))))
     except (TypeError, ValueError):
         return DEFAULT_GEMINI_RPD
 
@@ -42,18 +46,21 @@ def _trim_and_count(now: float):
 
 def acquire_gemini_slot() -> None:
     """
-    Block until a Gemini request is allowed under RPM and RPD limits, then record the request.
-    Call this once before each Gemini API call (or before each batch / server request that uses Gemini).
+    Optionally block until a Gemini request is allowed under RPM/RPD, then record it.
+
+    When GEMINI_RPM and GEMINI_RPD are 0 (default), returns immediately with no wait.
+    Call once before each Gemini API call (or batch / server request that uses Gemini).
     """
     rpm = _get_rpm_limit()
     rpd = _get_rpd_limit()
+    if rpm <= 0 and rpd <= 0:
+        return
 
     while True:
         now = time.time()
         last_minute, last_day = _trim_and_count(now)
 
-        if last_minute >= rpm:
-            # Wait until oldest request in the last minute is outside the window
+        if rpm > 0 and last_minute >= rpm:
             oldest_in_minute = next(t for t in _request_timestamps if t >= now - WINDOW_MINUTE_SEC)
             sleep_time = WINDOW_MINUTE_SEC - (now - oldest_in_minute)
             if sleep_time > 0:
@@ -64,7 +71,7 @@ def acquire_gemini_slot() -> None:
                 time.sleep(sleep_time)
             continue
 
-        if last_day >= rpd:
+        if rpd > 0 and last_day >= rpd:
             oldest = _request_timestamps[0]
             retry_in = max(0.0, WINDOW_DAY_SEC - (now - oldest))
             hours = retry_in / 3600
