@@ -86,6 +86,12 @@ def write_env_from_form(root: Path, form: dict) -> None:
     resume_path = get("resume_path", "").strip()
     if resume_path:
         lines.append("RESUME_PDF_PATH=" + _env_value(resume_path))
+    telegram_token = get("telegram_bot_token", "").strip()
+    if telegram_token:
+        lines.append("TELEGRAM_BOT_TOKEN=" + _env_value(telegram_token))
+    telegram_chat_id = get("telegram_chat_id", "").strip()
+    if telegram_chat_id:
+        lines.append("TELEGRAM_CHAT_ID=" + _env_value(telegram_chat_id))
     env_path = root / ".env"
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -236,6 +242,21 @@ SETUP_HTML = r"""<!DOCTYPE html>
     </section>
 
     <section>
+      <h2>Telegram (optional)</h2>
+      <p class="hint">Get resume + cover letter packages on your phone when a Good or Very good fit is ready. You can also configure this later in dashboard <strong>Settings</strong>.</p>
+      <ol class="examples" style="list-style: decimal;">
+        <li>Message <strong>@BotFather</strong> → send <code>/newbot</code> → copy the <strong>bot token</strong> into the field below.</li>
+        <li>After you save and restart the main app, open a chat with your bot and send <code>/start</code>.</li>
+        <li>The bot replies with <strong>your chat ID</strong> (a number). Paste it below — use <em>your</em> ID, not the bot's. It is also saved to <code>local_data/telegram_chat_id.txt</code> if you leave this empty.</li>
+      </ol>
+      <label for="telegram_bot_token">Telegram bot token</label>
+      <input type="password" id="telegram_bot_token" name="telegram_bot_token" placeholder="123456:ABC..." autocomplete="off">
+      <label for="telegram_chat_id">Telegram chat ID (optional)</label>
+      <input type="text" id="telegram_chat_id" name="telegram_chat_id" placeholder="e.g. 2094018073" autocomplete="off">
+      <p class="hint">Chat ID is usually filled after the first restart (step 2–3). Leave it blank for now if you do not have it yet.</p>
+    </section>
+
+    <section>
       <h2>Profile</h2>
       <label for="resume_pdf">Resume (PDF)</label>
       <input type="file" id="resume_pdf" name="resume_pdf" accept=".pdf">
@@ -266,7 +287,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
 
     <div class="next-steps">
       <strong>After you save:</strong> close this tab → stop the app if it is still waiting (Ctrl+C) → start it again.
-      The dashboard opens when jobs appear; optional Telegram and finer filters live under <strong>Settings</strong>.
+      If you set a Telegram bot token, message the bot <code>/start</code> after restart to capture your chat ID. Finer filters live under dashboard <strong>Settings</strong>.
     </div>
 
     <form id="save_form" method="post" action="/save" enctype="multipart/form-data" style="display:none;">
@@ -276,6 +297,8 @@ SETUP_HTML = r"""<!DOCTYPE html>
       <input type="hidden" id="f_gemini_model" name="gemini_model">
       <input type="hidden" id="f_location" name="location">
       <input type="hidden" id="f_check_sustainability" name="check_sustainability">
+      <input type="hidden" id="f_telegram_bot_token" name="telegram_bot_token">
+      <input type="hidden" id="f_telegram_chat_id" name="telegram_chat_id">
       <input type="hidden" id="f_additional_details" name="additional_details">
       <input type="hidden" id="f_resume_path" name="resume_path">
     </form>
@@ -358,6 +381,8 @@ SETUP_HTML = r"""<!DOCTYPE html>
       document.getElementById('f_gemini_model').value = document.getElementById('gemini_model').value || 'gemini-2.0-flash';
       document.getElementById('f_location').value = document.getElementById('location').value || '';
       document.getElementById('f_check_sustainability').value = document.querySelector('input[name="check_sustainability"]').checked ? 'on' : '';
+      document.getElementById('f_telegram_bot_token').value = document.getElementById('telegram_bot_token').value || '';
+      document.getElementById('f_telegram_chat_id').value = document.getElementById('telegram_chat_id').value || '';
       document.getElementById('f_additional_details').value = document.getElementById('additional_details').value;
       document.getElementById('f_resume_path').value = ''; // Set by server after upload
       var form = document.getElementById('save_form');
@@ -368,6 +393,8 @@ SETUP_HTML = r"""<!DOCTYPE html>
       fd.append('gemini_model', document.getElementById('gemini_model').value || 'gemini-2.0-flash');
       fd.append('location', document.getElementById('location').value || '');
       fd.append('check_sustainability', document.querySelector('input[name="check_sustainability"]').checked ? 'on' : '');
+      fd.append('telegram_bot_token', document.getElementById('telegram_bot_token').value || '');
+      fd.append('telegram_chat_id', document.getElementById('telegram_chat_id').value || '');
       fd.append('additional_details', document.getElementById('additional_details').value);
       var resumeFile = document.getElementById('resume_pdf').files[0];
       if (resumeFile) fd.append('resume_pdf', resumeFile);

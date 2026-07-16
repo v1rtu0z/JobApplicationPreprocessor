@@ -26,7 +26,7 @@ Create a `.env` file in the project root with the following keys:
 *   `TELEGRAM_BOT_TOKEN`: (Optional) Bot token from [@BotFather](https://t.me/BotFather) (`/newbot`) — enables phone notifications when an application is ready.
 *   `TELEGRAM_CHAT_ID`: (Optional) Your numeric Telegram user chat ID. Send `/start` to your bot after the app is running; the bot replies with your ID (use yours, not the bot's). Also stored in `local_data/telegram_chat_id.txt`.
 
-**Telegram setup (optional):** Message @BotFather → `/newbot` → copy token into `TELEGRAM_BOT_TOKEN` → restart the app → open your bot in Telegram → `/start` → copy the chat ID into `TELEGRAM_CHAT_ID` (or rely on the auto-saved file). You can also edit these in the dashboard **Settings → App config (.env)** tab.
+**Telegram setup (optional):** On first-run setup, or later in dashboard **Settings → Telegram**: Message @BotFather → `/newbot` → paste the token → restart the app → open your bot in Telegram → `/start` → paste your chat ID into `TELEGRAM_CHAT_ID` (or rely on the auto-saved file).
 
 **Gemini API and rate limiting:** Job analysis is done locally in batches (one API call per several jobs) to reduce usage. Cover letter and resume tailoring still use the server (`SERVER_URL`). All Gemini-backed work goes through an optional local rate gate. By default there is **no local RPM/RPD cap** (the app relies on Google’s API quotas and key fallback). Set `GEMINI_RPM` / `GEMINI_RPD` only if you want an explicit local throttle.
 
@@ -58,5 +58,5 @@ When you run the application as a packaged executable (e.g. built with PyInstall
 *   Enter your **Apify API token**, **Gemini API key**, **server URL**, **API key**, and **email address** in the form.
 *   The setup page includes links to create an Apify account, create an Apify API key, and get a Gemini API key. Use these if you do not have keys yet.
 *   **Apify free tier**: Apify gives $5 in free platform credits every month. The app uses Apify for LinkedIn job listings, job details, and company overviews. With $5 you can typically process on the order of thousands of job listings and hundreds of company/job-detail enrichments per month (exact numbers depend on Apify pricing). Check your usage in the Apify console so you are not surprised when the app pauses Apify after the monthly cap.
-*   You can optionally attach your **resume (PDF)**, paste **additional details** text, and upload **job preferences (YAML)**. Use **Validate** to test your API keys before saving.
+*   You can optionally attach your **resume (PDF)**, paste **additional details** text, upload **job preferences (YAML)**, and set a **Telegram bot token** (and chat ID if you already have one). Use **Validate** to test your API keys before saving.
 *   After you click **Save configuration**, the app writes a `.env` file and optional files to the application directory. You can then close the browser tab and run the application again (or it may continue automatically). No manual .env setup is required.
