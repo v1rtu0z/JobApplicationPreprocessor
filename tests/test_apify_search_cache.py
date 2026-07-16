@@ -260,6 +260,11 @@ class TestFetchJobsViaApifyCache:
 
 
 class TestProcessCollectionPhaseCache:
+    @pytest.fixture(autouse=True)
+    def force_apify_collection_enabled(self, monkeypatch):
+        """Local .env may set SKIP_APIFY_COLLECTION=true; these tests exercise the collection path."""
+        monkeypatch.setattr("pipeline.constants.SKIP_APIFY_COLLECTION", False)
+
     @pytest.fixture
     def collection_config(self, isolated_job_filters):
         config = {

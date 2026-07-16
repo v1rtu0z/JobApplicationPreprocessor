@@ -26,10 +26,7 @@ from .logging_dashboard import _setup_log_capture, _launch_dashboard_once
 from .filtering import _build_company_overview_cache
 from .bulk_ops import bulk_filter_collected_jobs, bulk_fetch_missing_job_descriptions, fetch_company_overviews
 from .dashboard_filter import default_dashboard_job_keys
-from .collection import (
-    process_collection_phase,
-    process_new_jobs_pipeline,
-)
+from .collection import process_collection_phase
 from .analysis import analyze_all_jobs
 from .jd_fit_scoring import (
     is_automation_idle,
@@ -236,17 +233,17 @@ def _run_processing_cycle(db, resume_json, company_overview_cache, shutdown_requ
         print("\nSkipping Apify collection (SKIP_APIFY_COLLECTION=true).")
         collected_jobs, total_new_jobs = [], 0
     else:
+        # Each search's jobs are fully processed (filter/CO/analyze/resumes) inside
+        # process_collection_phase before the next search runs (see item #23), so there is no
+        # separate "process the whole batch" step here — that would just redo already-finished
+        # work. The finalize passes below still catch any jobs that fall through this cycle
+        # (e.g. jobs that were still missing a JD/CO when their search's batch was drained).
         collected_jobs, total_new_jobs, _ = process_collection_phase(
             db, resume_json, shutdown_requested, company_overview_cache
         )
 
     if total_new_jobs > 0:
         progress_made_in_cycle = True
-
-    if collected_jobs:
-        print(f"\nProcessing {len(collected_jobs)} total new jobs collected in this cycle...")
-        if process_new_jobs_pipeline(db, resume_json, collected_jobs, company_overview_cache):
-            progress_made_in_cycle = True
 
     print("\nFinalizing processing cycle (processing leftover batches)...")
     if bulk_filter_collected_jobs(db, resume_json, force_process=True) > 0:

@@ -114,7 +114,15 @@ def collect_jobs_via_apify(db, search_url=None, params=None):
 
 
 def process_collection_phase(db, resume_json, shutdown_requested, company_overview_cache=None):
-    """Handle job collection from Apify and search parameter generation. Returns (collected_jobs, total_new_jobs, cache)."""
+    """Handle job collection from Apify and search parameter generation.
+
+    Each search's new jobs are run through the full downstream pipeline (bulk filter, company
+    overview, sustainability, analysis, resumes/cover letters) immediately, before the next
+    search request is made. This keeps memory/backlog bounded, surfaces good-fit jobs to the user
+    sooner, and preserves partial progress if the process is interrupted mid-cycle.
+
+    Returns (collected_jobs, total_new_jobs, cache).
+    """
     from .constants import SKIP_APIFY_COLLECTION
 
     if SKIP_APIFY_COLLECTION:
@@ -132,18 +140,26 @@ def process_collection_phase(db, resume_json, shutdown_requested, company_overvi
     total_new_jobs = 0
     any_apify_search_ran = False
 
+    def _run_search_and_drain(params) -> None:
+        """Collect one search's jobs, then fully process just that batch before returning."""
+        nonlocal total_new_jobs, any_apify_search_ran
+        if not utils.apify_jobs_search_is_cached(params=params):
+            any_apify_search_ran = True
+        new_jobs = collect_jobs_via_apify(db, params=params)
+        if not new_jobs:
+            return
+        collected_jobs.extend(new_jobs)
+        total_new_jobs += len(new_jobs)
+        print(f"Added {len(new_jobs)} new jobs from search: {params.get('keywords', 'N/A')} in {params.get('location', 'N/A')}")
+        print(f"Draining pipeline for these {len(new_jobs)} jobs before the next search...")
+        process_new_jobs_pipeline(db, resume_json, new_jobs, company_overview_cache)
+
     if llm_params_list:
         print(f"\nUsing cached search parameters ({len(llm_params_list)} parameter sets).")
         for params in llm_params_list:
             if shutdown_requested['flag']:
                 break
-            if not utils.apify_jobs_search_is_cached(params=params):
-                any_apify_search_ran = True
-            new_jobs = collect_jobs_via_apify(db, params=params)
-            if new_jobs:
-                collected_jobs.extend(new_jobs)
-                total_new_jobs += len(new_jobs)
-                print(f"Added {len(new_jobs)} new jobs from search: {params.get('keywords', 'N/A')} in {params.get('location', 'N/A')}")
+            _run_search_and_drain(params)
 
     should_regenerate_params = (
         not llm_params_list
@@ -166,13 +182,7 @@ def process_collection_phase(db, resume_json, shutdown_requested, company_overvi
             for params in llm_params_list:
                 if shutdown_requested['flag']:
                     break
-                if not utils.apify_jobs_search_is_cached(params=params):
-                    any_apify_search_ran = True
-                new_jobs = collect_jobs_via_apify(db, params=params)
-                if new_jobs:
-                    collected_jobs.extend(new_jobs)
-                    total_new_jobs += len(new_jobs)
-                    print(f"Added {len(new_jobs)} new jobs from search: {params.get('keywords', 'N/A')} in {params.get('location', 'N/A')}")
+                _run_search_and_drain(params)
         else:
             print("Warning: Could not generate search parameters. Please check your resume and API keys.")
 
