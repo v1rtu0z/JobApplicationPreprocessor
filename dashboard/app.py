@@ -30,10 +30,11 @@ def main() -> None:
     except OSError:
         pass
 
+    # Do not pass index= when key= is set — index=0 resets to Jobs on every
+    # Activity auto-refresh rerun and makes Jobs filters flash in a loop.
     view = st.sidebar.radio(
         "View",
         ["Jobs", "Activity", "Settings"],
-        index=0,
         key="dashboard_view",
     )
     st.sidebar.markdown("---")

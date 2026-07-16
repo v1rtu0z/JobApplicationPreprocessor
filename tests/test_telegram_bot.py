@@ -369,3 +369,32 @@ class TestVeryGoodFitTelegramDeferred:
             job_db, stored, "Very good fit", "Strong match.", {}, {"sustainability_criteria": {}}
         )
         notify_mock.assert_called_once()
+
+
+class TestSendTestMessage:
+    def test_sends_plain_ping(self, monkeypatch):
+        calls = []
+
+        def fake_api(method, **payload):
+            calls.append((method, payload))
+            return {"ok": True, "result": {}}
+
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setattr(tg, "resolve_chat_id", lambda: "99")
+        monkeypatch.setattr(tg, "_api", fake_api)
+
+        assert tg.send_test_message() == "99"
+        assert calls[0][0] == "sendMessage"
+        assert calls[0][1]["chat_id"] == "99"
+        assert "test" in calls[0][1]["text"].lower()
+
+    def test_requires_token(self, monkeypatch):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match="TELEGRAM_BOT_TOKEN"):
+            tg.send_test_message()
+
+    def test_requires_chat_id(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setattr(tg, "resolve_chat_id", lambda: None)
+        with pytest.raises(RuntimeError, match="chat ID"):
+            tg.send_test_message()

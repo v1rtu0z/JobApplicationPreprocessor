@@ -105,6 +105,8 @@ def _read_env_map(env_path: Path) -> dict[str, str]:
 def _write_env_file(env_path: Path, merged: dict[str, str]) -> None:
     """Write a normalized .env with stable ordering + extra keys at end."""
     env_path.parent.mkdir(parents=True, exist_ok=True)
+    # Dead option: storage is always local SQLite; drop if present in older .env files.
+    merged.pop("USE_LOCAL_STORAGE", None)
     header = "# Managed by the dashboard Settings page\n"
     preferred_order = [
         "APIFY_API_TOKEN",
@@ -308,6 +310,24 @@ def render_settings_view() -> None:
                     merged["TELEGRAM_CHAT_ID"] = telegram_chat_id.strip()
                 _write_env_file(env_path, merged)
                 st.success(f"Saved `{env_path}`. Restart the main app to ensure it reloads env vars.")
+
+        st.markdown("#### Telegram connection test")
+        st.caption(
+            "Sends a plain text ping using the token/chat ID currently in `.env` "
+            "(save the form above first if you just edited them). "
+            "Does not create a dummy job or touch the jobs database."
+        )
+        if st.button("Send Telegram test message", key="settings_telegram_test_send"):
+            try:
+                from dotenv import load_dotenv
+
+                load_dotenv(env_path, override=True)
+                from utils.telegram_bot import send_test_message
+
+                chat_id = send_test_message()
+                st.success(f"Test message sent to chat `{chat_id}`. Check Telegram.")
+            except Exception as e:
+                st.error(f"Telegram test failed: {e}")
 
         st.divider()
         st.subheader("Files (from setup)")

@@ -78,6 +78,28 @@ def is_enabled() -> bool:
     return bool(_token())
 
 
+def send_test_message(text: str | None = None) -> str:
+    """Send a plain text ping to the configured chat. Returns the chat id used.
+
+    Raises RuntimeError if the bot token or chat id is missing, or if Telegram
+    rejects the request.
+    """
+    if not is_enabled():
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Save it in Settings and try again.")
+    chat_id = resolve_chat_id()
+    if not chat_id:
+        raise RuntimeError(
+            "No Telegram chat ID yet. Save TELEGRAM_CHAT_ID, or open your bot and send /start, "
+            "then try again."
+        )
+    body = (text or "").strip() or (
+        "Telegram test from Job Application Preprocessor Settings.\n"
+        "If you see this, bot token and chat ID are working."
+    )
+    _api("sendMessage", chat_id=chat_id, text=body, disable_web_page_preview=True)
+    return str(chat_id)
+
+
 def resolve_chat_id() -> str | None:
     global _chat_mismatch_warned
     file_chat = None
