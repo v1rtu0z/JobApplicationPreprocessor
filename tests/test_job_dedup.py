@@ -30,7 +30,8 @@ class TestGetExistingJobKeys:
         ])
         assert get_existing_job_keys(store) == set()
 
-    def test_excludes_applied_jobs(self):
+    def test_includes_applied_jobs(self):
+        """Applied is user-scoped — still occupies the dedup key (no shared overwrite)."""
         store = MockStore([
             {
                 "Job Title": "Engineer",
@@ -39,7 +40,7 @@ class TestGetExistingJobKeys:
                 "Applied": "TRUE",
             },
         ])
-        assert get_existing_job_keys(store) == set()
+        assert get_existing_job_keys(store) == {"Engineer @ Acme"}
 
     def test_repository_matches_storage_helper(self):
         store = MockStore([
@@ -50,7 +51,13 @@ class TestGetExistingJobKeys:
                 "Job URL": "b",
                 "Job posting expired": "TRUE",
             },
+            {
+                "Job Title": "Applied Role",
+                "Company Name": "Co",
+                "Job URL": "c",
+                "Applied": "TRUE",
+            },
         ])
         repo = JobRepository(store)
         assert repo.get_existing_job_keys() == get_existing_job_keys(store)
-        assert repo.get_existing_job_keys() == {"Active @ Co"}
+        assert repo.get_existing_job_keys() == {"Active @ Co", "Applied Role @ Co"}

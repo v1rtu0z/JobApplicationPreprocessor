@@ -9,6 +9,7 @@ from utils import (
     get_location_priority,
     SHEET_HEADER,
 )
+from utils.storage import build_repost_updates, get_expired_jobs_by_key
 from config import _get_job_filters, _save_job_filters, CONFIG_FILE
 from api_methods import get_search_parameters
 from core import ApifyDataSource
@@ -25,8 +26,8 @@ from .analysis import analyze_all_jobs
 from .resumes import process_resumes_and_cover_letters
 
 
-def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None:
-    """Build SHEET_HEADER row list from a normalized job item. Returns None if should skip."""
+def _normalized_to_row_dict(normalized: dict, filters: dict) -> dict[str, str] | None:
+    """Build a SHEET_HEADER row dict from a normalized job item. Returns None if should skip."""
     job_title = _normalize_job_title(normalized.get("job_title", ""))
     company_name = (normalized.get("company_name") or "").strip()
     job_url = (normalized.get("job_url") or "").strip()
@@ -54,16 +55,31 @@ def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None
         "Location Priority": str(location_priority),
         "Job Description": job_description,
         "Job URL": job_url,
+        "Company URL": (normalized.get("company_url") or "").strip(),
         "CO fetch attempted": "FALSE",
         "JD crawl attempted": "FALSE",
         "Bulk filtered": "FALSE",
         "Date added": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     })
+    return row
+
+
+def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None:
+    """Build SHEET_HEADER row list from a normalized job item. Returns None if should skip."""
+    row = _normalized_to_row_dict(normalized, filters)
+    if not row:
+        return None
     return [row[col] for col in SHEET_HEADER]
 
 
 def collect_jobs_via_apify(db, search_url=None, params=None):
-    """Collect jobs using ApifyDataSource. Returns list of (job_url, company_name) for new jobs."""
+    """Collect jobs using ApifyDataSource. Returns list of (job_url, company_name) for new jobs.
+
+    Active and applied (non-expired) title@company keys are skipped. When the same key matches
+    an **expired** row, that row is updated in place (new URL/JD, cleared listing/pipeline
+    state). Applied is left alone — it is user-scoped and must remain so when this refresh is
+    shared across users.
+    """
     source = ApifyDataSource()
     if not source.is_available():
         print("Apify is currently unavailable (usage limit reached). Skipping collection phase.")
@@ -78,9 +94,11 @@ def collect_jobs_via_apify(db, search_url=None, params=None):
     print("=" * 60 + "\n")
 
     existing_jobs = get_existing_job_keys(db)
+    expired_by_key = get_expired_jobs_by_key(db)
     filters = _get_job_filters()
     new_rows = []
     new_job_identifiers = []
+    repost_count = 0
 
     inputs = [{"params": params}] if params else [{"search_url": search_url}]
 
@@ -91,15 +109,36 @@ def collect_jobs_via_apify(db, search_url=None, params=None):
         p = item_input.get("params")
         for normalized in source.fetch_jobs(search_url=url, params=p):
             try:
-                job_key = f"{_normalize_job_title(normalized.get('job_title', ''))} @ {(normalized.get('company_name') or '').strip()}"
+                job_title = _normalize_job_title(normalized.get("job_title", ""))
+                company_name = (normalized.get("company_name") or "").strip()
+                job_key = f"{job_title} @ {company_name}"
                 if job_key in existing_jobs:
                     continue
-                row_data = _normalized_to_row_data(normalized, filters)
-                if not row_data:
+                row_dict = _normalized_to_row_dict(normalized, filters)
+                if not row_dict:
                     continue
-                new_rows.append(row_data)
+
+                old_expired = expired_by_key.get(job_key)
+                if old_expired:
+                    old_url = (old_expired.get("Job URL") or "").strip()
+                    old_company = (old_expired.get("Company Name") or "").strip()
+                    updates = build_repost_updates(old_expired, row_dict)
+                    updated = db.update_job_by_key(old_url, old_company, updates)
+                    if updated:
+                        existing_jobs.add(job_key)
+                        expired_by_key.pop(job_key, None)
+                        new_job_identifiers.append((row_dict["Job URL"], row_dict["Company Name"]))
+                        repost_count += 1
+                        print(
+                            f"Reposted job (updated expired row): {job_key} "
+                            f"[{old_url} → {row_dict['Job URL']}]"
+                        )
+                        continue
+                    # Fall through to insert if the update matched nothing (row vanished).
+
+                new_rows.append([row_dict[col] for col in SHEET_HEADER])
                 existing_jobs.add(job_key)
-                new_job_identifiers.append((row_data[5], row_data[0]))  # Job URL, Company Name
+                new_job_identifiers.append((row_dict["Job URL"], row_dict["Company Name"]))
                 print(f"Collected job via Apify: {job_key}")
             except Exception as e:
                 print(f"Unexpected error processing Apify job item: {e}")
@@ -107,7 +146,9 @@ def collect_jobs_via_apify(db, search_url=None, params=None):
     if new_rows:
         db.append_rows(new_rows)
         print(f"Successfully added {len(new_rows)} jobs.")
-    else:
+    if repost_count:
+        print(f"Updated {repost_count} expired reposted job(s) in place.")
+    if not new_rows and not repost_count:
         print("No new jobs found via Apify.")
 
     return new_job_identifiers
