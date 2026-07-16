@@ -9,9 +9,9 @@ Requires TELEGRAM_BOT_TOKEN in .env. Chat ID from TELEGRAM_CHAT_ID or the first
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -255,13 +255,32 @@ def _split_text(text: str, limit: int = MAX_MESSAGE_LEN, reserve: int = 0) -> li
     return chunks
 
 
-def _apply_prompt_keyboard(job_id: int) -> dict:
+def _job_fingerprint(row: dict) -> str:
+    """Short stable id for Telegram callbacks (survives accidental DB id remapping)."""
+    raw = "\n".join(
+        [
+            (row.get("Job URL") or "").strip(),
+            (row.get("Company Name") or "").strip(),
+            (row.get("Job Title") or "").strip(),
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+
+
+def _find_job_by_fingerprint(db, fingerprint: str) -> dict | None:
+    for row in db.get_all_jobs():
+        if _job_fingerprint(row) == fingerprint:
+            return row
+    return None
+
+
+def _apply_prompt_keyboard(job_id: int, fingerprint: str) -> dict:
     return {
         "inline_keyboard": [
-            [{"text": "Yes, I applied", "callback_data": f"q1:{job_id}:yes"}],
+            [{"text": "Yes, I applied", "callback_data": f"q1:{job_id}:{fingerprint}:yes"}],
             [
-                {"text": "Not yet", "callback_data": f"q1:{job_id}:no"},
-                {"text": "Bad analysis", "callback_data": f"q1:{job_id}:bad"},
+                {"text": "Not yet", "callback_data": f"q1:{job_id}:{fingerprint}:no"},
+                {"text": "Bad analysis", "callback_data": f"q1:{job_id}:{fingerprint}:bad"},
             ],
         ]
     }
@@ -279,7 +298,7 @@ def _send_apply_prompt(chat_id: str, row: dict) -> int | None:
 
     footer = _job_link_footer(row)
     text = _apply_prompt_text(footer)
-    keyboard = _apply_prompt_keyboard(job_id)
+    keyboard = _apply_prompt_keyboard(job_id, _job_fingerprint(row))
 
     prompt = _api(
         "sendMessage",
@@ -315,7 +334,7 @@ def send_application_package(chat_id: str, row: dict) -> int | None:
     cl_text = normalize_cover_letter_body(cl_text)
     footer = _job_link_footer(row)
     apply_caption = _apply_prompt_text(footer).lstrip("\n")
-    keyboard = _apply_prompt_keyboard(job_id)
+    keyboard = _apply_prompt_keyboard(job_id, _job_fingerprint(row))
 
     if cl_text:
         header = "📝 <b>Cover letter</b>\n\n"
@@ -376,12 +395,12 @@ def send_application_package(chat_id: str, row: dict) -> int | None:
     return _send_apply_prompt(chat_id, row)
 
 
-def _expired_keyboard(job_id: int, *, stage: str = "q2") -> dict:
+def _expired_keyboard(job_id: int, fingerprint: str, *, stage: str = "q2") -> dict:
     return {
         "inline_keyboard": [
             [
-                {"text": "Yes, expired", "callback_data": f"{stage}:{job_id}:yes"},
-                {"text": "Still active", "callback_data": f"{stage}:{job_id}:no"},
+                {"text": "Yes, expired", "callback_data": f"{stage}:{job_id}:{fingerprint}:yes"},
+                {"text": "Still active", "callback_data": f"{stage}:{job_id}:{fingerprint}:no"},
             ]
         ]
     }
@@ -394,20 +413,44 @@ def _authorized_chat(chat_id: str | int) -> bool:
     return str(chat_id) == str(allowed)
 
 
-def _parse_callback(data: str) -> tuple[str, int, str] | None:
+def _parse_callback(data: str) -> tuple[str, int, str, str | None] | None:
+    """Parse callback_data into (stage, job_id, answer, fingerprint).
+
+    New format: ``q1:{id}:{fingerprint}:{answer}``
+    Legacy format (pre-fingerprint): ``q1:{id}:{answer}``
+    """
     parts = (data or "").split(":")
-    if len(parts) != 3 or parts[0] not in {"q1", "q2", "qco"}:
+    if len(parts) == 3:
+        stage, job_id_s, answer = parts
+        fingerprint = None
+    elif len(parts) == 4:
+        stage, job_id_s, fingerprint, answer = parts
+    else:
+        return None
+    if stage not in {"q1", "q2", "qco"}:
         return None
     try:
-        job_id = int(parts[1])
+        job_id = int(job_id_s)
     except ValueError:
         return None
-    answer = parts[2].lower()
-    if parts[0] == "q1" and answer not in {"yes", "no", "bad"}:
+    answer = answer.lower()
+    if stage == "q1" and answer not in {"yes", "no", "bad"}:
         return None
-    if parts[0] in {"q2", "qco"} and answer not in {"yes", "no"}:
+    if stage in {"q2", "qco"} and answer not in {"yes", "no"}:
         return None
-    return parts[0], job_id, answer
+    if fingerprint is not None and (len(fingerprint) != 8 or any(c not in "0123456789abcdef" for c in fingerprint)):
+        return None
+    return stage, job_id, answer, fingerprint
+
+
+def _resolve_callback_job(db, job_id: int, fingerprint: str | None) -> dict | None:
+    """Load the job for a callback, recovering via fingerprint if ids were remapped."""
+    job = db.get_job_by_id(job_id)
+    if fingerprint is None:
+        return job
+    if job is not None and _job_fingerprint(job) == fingerprint:
+        return job
+    return _find_job_by_fingerprint(db, fingerprint)
 
 
 def _advance_application_queue(db, chat_id: str | int) -> None:
@@ -424,15 +467,18 @@ def _advance_application_queue(db, chat_id: str | int) -> None:
 def _complete_application_prompt(chat_id: str | int, message_id: int | None, label: str) -> None:
     if not message_id:
         return
-    try:
-        _api(
-            "editMessageText",
-            chat_id=chat_id,
-            message_id=message_id,
-            text=f"Did you apply? → {label}",
-        )
-    except Exception:
-        pass
+    text = f"Did you apply? → {label}"
+    # Apply buttons sit on either a text prompt or a cover-letter PDF caption.
+    for method, payload in (
+        ("editMessageText", {"text": text}),
+        ("editMessageCaption", {"caption": text}),
+        ("editMessageReplyMarkup", {"reply_markup": json.dumps({"inline_keyboard": []})}),
+    ):
+        try:
+            _api(method, chat_id=chat_id, message_id=message_id, **payload)
+            return
+        except Exception:
+            continue
 
 
 def handle_callback_query(callback_query: dict, db) -> None:
@@ -449,16 +495,22 @@ def handle_callback_query(callback_query: dict, db) -> None:
             _api("answerCallbackQuery", callback_query_id=callback_id, text="Unknown action")
         return
 
-    stage, job_id, answer = parsed
-    job = db.get_job_by_id(job_id)
+    stage, job_id, answer, fingerprint = parsed
+    job = _resolve_callback_job(db, job_id, fingerprint)
     if not job:
         if callback_id:
-            _api("answerCallbackQuery", callback_query_id=callback_id, text="Job not found in database")
+            _api(
+                "answerCallbackQuery",
+                callback_query_id=callback_id,
+                text="Job not found — wait for a fresh notification",
+            )
         return
 
+    job_id = int(job["_id"])
     yes = answer == "yes"
     company = job.get("Company Name", "")
     title = job.get("Job Title", "")
+    fingerprint = _job_fingerprint(job)
 
     if stage == "q1":
         msg = callback_query.get("message", {})
@@ -520,7 +572,7 @@ def handle_callback_query(callback_query: dict, db) -> None:
                 + _job_link_footer(job)
             ),
             parse_mode="HTML",
-            reply_markup=_expired_keyboard(job_id),
+            reply_markup=_expired_keyboard(job_id, fingerprint),
         )
         return
 
@@ -997,6 +1049,6 @@ def _handle_skip_co_prompt(chat_id: str | int, db) -> None:
             "Is the job posting expired? (use the buttons below)"
         ),
         parse_mode="HTML",
-        reply_markup=_expired_keyboard(pending_id, stage="qco"),
+        reply_markup=_expired_keyboard(pending_id, _job_fingerprint(job), stage="qco"),
     )
 

@@ -62,33 +62,10 @@ class JobDatabase:
             conn.commit()
         except Exception:
             pass  # Index creation might fail if columns don't exist yet
-        
-        # Fix ID gaps if any
-        cursor.execute("SELECT COUNT(*), MAX(id) FROM jobs")
-        count, max_id = cursor.fetchone()
-        if count and count > 0 and max_id != count:
-            print(f"Fixing ID gaps in {self.db_path}...")
-            self._realign_ids(cursor)
-            conn.commit()
-            
+
+        # Never renumber job ids: Telegram callbacks and pending-state files embed them.
         conn.close()
 
-    def _realign_ids(self, cursor):
-        """Re-number all IDs sequentially from 1."""
-        conn = cursor.connection
-        columns = ', '.join([f'"{col}"' for col in self.columns])
-        try:
-            cursor.execute('BEGIN IMMEDIATE')
-            cursor.execute(f"CREATE TEMPORARY TABLE jobs_backup AS SELECT {columns} FROM jobs ORDER BY id")
-            cursor.execute("DELETE FROM jobs")
-            cursor.execute("DELETE FROM sqlite_sequence WHERE name='jobs'")
-            cursor.execute(f"INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_backup")
-            cursor.execute("DROP TABLE jobs_backup")
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-    
     def get_all_jobs(self) -> list[dict[str, str]]:
         """Get all jobs as a list of dictionaries."""
         conn = self._get_connection()

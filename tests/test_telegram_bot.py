@@ -152,7 +152,53 @@ class TestCallbackHandling:
         assert updated["Telegram app completed"] == "TRUE"
 
 
-class TestNotifyReadyApplications:
+class TestCallbackFingerprint:
+    def test_fingerprint_recovers_after_id_remap(self, job_db, monkeypatch):
+        """Stale callback id must still update the job matching the fingerprint."""
+        job_db.add_jobs([
+            _ready_job(**{"Company Name": "Wrong Co", "Job Title": "Wrong", "Job URL": "https://example.com/wrong"}),
+            _ready_job(**{
+                "Company Name": "All Your BI",
+                "Job Title": "Lead AI Engineer",
+                "Job URL": "https://www.linkedin.com/jobs/view/4431747816",
+            }),
+        ])
+        wrong, target = job_db.get_all_jobs()
+        fp = tg._job_fingerprint(target)
+        calls = []
+
+        def fake_api(method, **payload):
+            calls.append((method, payload))
+            return {"result": {"message_id": 99}}
+
+        monkeypatch.setattr(tg, "_api", fake_api)
+        monkeypatch.setattr(tg, "resolve_chat_id", lambda: "1")
+        monkeypatch.setattr(tg, "notify_ready_applications", MagicMock(return_value=0))
+        monkeypatch.setattr(tg, "PENDING_APP_FILE", job_db.db_path.parent / "pending_app.json")
+
+        # Callback embeds the wrong (remapped) id but the correct fingerprint.
+        tg.handle_callback_query(
+            {
+                "id": "cb-fp",
+                "data": f"q1:{wrong['_id']}:{fp}:yes",
+                "message": {"chat": {"id": 1}, "message_id": 10},
+            },
+            job_db,
+        )
+
+        assert job_db.get_job_by_id(wrong["_id"]).get("Applied") != "TRUE"
+        updated = job_db.get_job_by_id(target["_id"])
+        assert updated["Applied"] == "TRUE"
+        assert any("All Your BI" in c[1].get("text", "") for c in calls if c[0] == "sendMessage")
+
+    def test_keyboard_includes_fingerprint(self):
+        row = _ready_job()
+        row["_id"] = 42
+        kb = tg._apply_prompt_keyboard(42, tg._job_fingerprint(row))
+        data = kb["inline_keyboard"][0][0]["callback_data"]
+        parsed = tg._parse_callback(data)
+        assert parsed == ("q1", 42, "yes", tg._job_fingerprint(row))
+
     def test_sends_and_marks_notified(self, job_db, tmp_path, monkeypatch):
         resume_path = tmp_path / "resume.pdf"
         resume_path.write_bytes(b"%PDF-1.4 test")
