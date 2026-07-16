@@ -9,4 +9,7 @@ job_preferences.yaml
 .venv
 .pytest_cache
 # Local planning docs — keep out of GitHub until ready to publish
-/docs/
+/docs/*
+!/docs/future-work/
+/docs/future-work/*
+!/docs/future-work/TRANSITION-PLAN.md
