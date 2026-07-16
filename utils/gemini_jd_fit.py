@@ -8,7 +8,7 @@ import time
 import google.genai as genai
 
 from .gemini_rate_limit import mark_gemini_rate_limit_hit
-from .fit_prompt_requirements import JD_SALARY_FIT_PROMPT_SECTION
+from .prompts import render_prompt
 
 JD_DESCRIPTION_MAX_CHARS = 3500
 
@@ -28,24 +28,12 @@ Location: {location}
 Job description (excerpt):
 {desc}
 """
-    return f"""You are a professional career assistant. Score how well each job fits the candidate using ONLY the resume and job description below (ignore company sustainability or culture; no company overview is available).
-
-{JD_SALARY_FIT_PROMPT_SECTION}
-
-Resume data JSON:
-{resume_str}
-
-Jobs to score:
-{jobs_text}
-
-For each job, output exactly one object with:
-- "job_id": the exact "Title @ Company" string given for that job
-- "jd_fit_score": integer from 1 (very poor fit) to 10 (excellent fit)
-- "reasoning": one short sentence
-
-Respond with ONLY a JSON array of these objects, one per job, in the same order as above. No markdown, no commentary.
-Example: [{{"job_id": "Engineer @ Acme", "jd_fit_score": 8, "reasoning": "Strong Python overlap."}}]
-"""
+    return render_prompt(
+        "jd_fit",
+        salary_section=render_prompt("jd_salary_fit"),
+        resume_json=resume_str,
+        jobs_text=jobs_text,
+    )
 
 
 def _extract_response_text(response) -> str:

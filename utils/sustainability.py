@@ -11,6 +11,7 @@ from .apify_client import rate_limit
 from .gemini_rate_limit import mark_gemini_rate_limit_hit
 from .gemini_throttle import acquire_gemini_slot
 from .parsing import fit_score_to_enum, normalize_company_name
+from .prompts import render_prompt
 
 
 def _call_gemini_for_sustainability(prompt: str, key_name_context: str = "") -> dict | None:
@@ -164,30 +165,12 @@ Overview: {data['company_overview']}
 Job Description snippet: {data['job_description'][:500] if data['job_description'] else "N/A"}
 """
 
-    prompt = f"""Analyze if these companies work on something sustainability-oriented.
-
-Sustainability here includes BOTH environmental AND social impact:
-- Environmental: clean energy, climate, carbon capture, circular economy, etc.
-- Social: healthcare (value-based care, patient outcomes, access to care, public health), education, poverty alleviation, social equity.
-
-{companies_text}
-
-Criteria for Sustainability:
-Return is_sustainable: true for companies in sustainable/impact-oriented industries such as:
-{positive_list}
-Also return true for healthcare companies whose primary focus is improving patient outcomes, value-based care, access to care, or public health (e.g. primary care enablement, care coordination, health equity).
-
-Return is_sustainable: false for:
-{negative_list}
-
-Return is_sustainable: false for neutral industries (banking, tech, finance, insurance, investment) UNLESS they have an explicit and primary sustainability/ESG/impact focus.
-
-You must respond with ONLY a JSON dictionary where keys are the exact company names provided above and values are objects with "is_sustainable" (boolean) and "reasoning" (string).
-Example:
-{{
-  "Company A": {{"is_sustainable": true, "reasoning": "Solar energy manufacturer"}},
-  "Company B": {{"is_sustainable": false, "reasoning": "Defense contractor"}}
-}}"""
+    prompt = render_prompt(
+        "sustainability_bulk",
+        companies_text=companies_text,
+        positive_list=positive_list,
+        negative_list=negative_list,
+    )
 
     batch_results = _call_gemini_for_sustainability(prompt, "bulk check")
 
@@ -236,32 +219,16 @@ def is_sustainable_company(company_name: str, company_overview: str, job_descrip
     positive_list = "\n".join([f"- {c}" for c in criteria.get('positive', [])])
     negative_list = "\n".join([f"- {c}" for c in criteria.get('negative', [])])
 
-    prompt = f"""Analyze if this company works on something sustainability-oriented.
-
-Sustainability here includes BOTH environmental AND social impact:
-- Environmental: clean energy, climate, carbon capture, circular economy, etc.
-- Social: healthcare (value-based care, patient outcomes, access to care, public health), education, poverty alleviation, social equity.
-
-Company Name: {company_name}
-
-Company Overview: {company_overview}
-
-Job Description: {job_description[:1000] if job_description else "Not available"}
-
-Return True for companies in sustainable/impact-oriented industries such as:
-{positive_list}
-Also return True for healthcare companies whose primary focus is improving patient outcomes, value-based care, access to care, or public health (e.g. primary care enablement, care coordination, health equity).
-
-Return False for:
-{negative_list}
-
-Return False for neutral industries (banking, tech, finance, insurance, investment) UNLESS they have explicit sustainability/ESG/impact investing focus.
-
-You must respond with ONLY a JSON object in this exact format:
-{{
-  "is_sustainable": True or False,
-  "reasoning": "brief explanation"
-}}"""
+    prompt = render_prompt(
+        "sustainability_single",
+        company_name=company_name,
+        company_overview=company_overview,
+        job_description_excerpt=(
+            job_description[:1000] if job_description else "Not available"
+        ),
+        positive_list=positive_list,
+        negative_list=negative_list,
+    )
 
     result = _call_gemini_for_sustainability(prompt, company_name)
 

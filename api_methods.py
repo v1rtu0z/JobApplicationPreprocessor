@@ -24,6 +24,7 @@ except ImportError:
 
 from utils import get_user_name
 from utils.gemini_throttle import acquire_gemini_slot
+from utils.prompts import render_prompt
 from config import _get_job_filters
 
 load_dotenv()
@@ -538,6 +539,8 @@ def get_tailored_cl(resume_json, job_details: dict, current_content: str = None,
         "retry_feedback": retry_feedback,
         "resume_json_data": json.dumps(resume_json),
         "model_name": model_name,
+        # Sent for future use: server COVER_LETTER prompt does not read this yet.
+        # Consolidate later (wire into server prompts.py, or drop from the client payload).
         "cover_letter_format_instructions": (
             "Do not include a Subject line or personal contact header block. "
             "Begin the letter directly with: Dear Hiring Team,"
@@ -580,54 +583,12 @@ def get_search_parameters(resume_json: dict) -> list[dict]:
         default_location = (filters.get('default_search_location') or '').strip()
         location_line = f"\nDefault job search location (use when not specified in additional details): {default_location}\n" if default_location else ""
 
-        # Build prompt for generating search parameters
-        prompt = f"""Based on the following resume and additional details, generate a list of search parameters for LinkedIn job searches.
-The goal is to find jobs that are a good fit for the user's background and preferences.
-
-IMPORTANT geographic scope:
-- Only search within EMEA (Europe, Middle East, Africa). Prefer concrete countries LinkedIn accepts: Italy, Spain, Germany, Netherlands, Serbia, Croatia, Montenegro, Bosnia and Herzegovina.
-- Include one worldwide-remote search (location: "Worldwide", remote filter on) for global remote roles; post-filters enforce CET/EET-friendly timezones.
-- Do NOT use broad ambiguous locations like plain "Remote" alone (pulls US/APAC); use "Worldwide" for global remote or a specific country.
-- Avoid "European Union" / "European Economic Area" as location strings (LinkedIn often rejects them); use specific countries instead.
-- Do NOT target United Kingdom as a primary search location (UK roles are only kept when globally remote).
-- For Serbia, Croatia, Montenegro, and Bosnia and Herzegovina: always set remote: remote (candidate speaks local languages and prefers remote roles there).
-
-Resume:
-{json.dumps(resume_json, indent=2)}
-
-Additional Details:
-{additional_details}{location_line}
-
-Return a JSON list of objects. Each object should have:
-- keywords: string (e.g., "Software Engineer", "Project Manager", "Data Scientist")
-- location: string (e.g., "Remote", "London", "United States", "New York")
-- remote: string (one of: "onsite", "remote", "hybrid") - default to "remote" if not specified
-- experienceLevel: string (one of: "internship", "entry", "associate", "mid_senior", "director", "executive") - infer from resume
-- date_posted: string (one of: "month", "week", "day") - default to "week"
-- limit: integer (number of results, default to 100)
-
-Provide 3-5 diverse search queries OR describe a search_matrix with separate keywords and locations lists.
-When using search_matrix, provide distinct keyword strings and location strings; the system expands every keyword across every location automatically.
-
-You must respond with ONLY a JSON array, no other text. Example format:
-[
-  {{
-    "keywords": "Software Engineer",
-    "location": "Remote",
-    "remote": "remote",
-    "experienceLevel": "mid_senior",
-    "date_posted": "week",
-    "limit": 100
-  }},
-  {{
-    "keywords": "Senior Developer",
-    "location": "United States",
-    "remote": "hybrid",
-    "experienceLevel": "mid_senior",
-    "date_posted": "week",
-    "limit": 100
-  }}
-]"""
+        prompt = render_prompt(
+            "search_parameters",
+            resume_json=json.dumps(resume_json, indent=2),
+            additional_details=additional_details,
+            location_line=location_line,
+        )
 
         # Try with primary key, then backup key
         api_keys = [
@@ -749,38 +710,13 @@ def bulk_filter_jobs(job_titles: list[dict], resume_json: dict, max_retries: int
 
     user_name_val = get_user_name(resume_json)
 
-    # Prepare the prompt
-    prompt = f"""You are helping {user_name_val} filter job opportunities.
-
-Resume JSON:
-{json.dumps(resume_json, indent=2)}
-
-Here are {len(job_titles)} job opportunities. 
-
-CONTEXT:
-We are building an iterative keyword-based filtering system to save costs on future searches. 
-1. Identify specific job titles that are clearly NOT a good fit.
-2. Identify generalizable "skip keywords" (substrings) for titles and company names that should ALWAYS be filtered out in the future.
-
-CRITERIA FOR FILTERING:
-1. Wrong technology stack or role requirements compared to the resume
-2. Wrong role type (e.g., mismatch between desired level or functional area)
-3. Wrong domain or industry that is clearly incompatible with the candidate's goals
-
-JOB DATA (JSON):
-{json.dumps(job_titles, indent=2)}
-
-Respond with ONLY a JSON object in this exact format:
-{{
-  "filtered_titles": ["exact job title 1", "exact job title 2"],
-  "new_filters": {{
-    "job_title_skip_keywords": ["keyword1", "keyword2"],
-    "company_skip_keywords": ["unwanted company 1"]
-  }}
-}}
-
-If ALL jobs are good fits, return: {{"filtered_titles": [], "new_filters": {{"job_title_skip_keywords": [], "company_skip_keywords": []}}}}
-"""
+    prompt = render_prompt(
+        "bulk_filter",
+        user_name=user_name_val,
+        resume_json=json.dumps(resume_json, indent=2),
+        job_count=len(job_titles),
+        job_titles_json=json.dumps(job_titles, indent=2),
+    )
 
     # Try with primary key, then backup key
     api_keys = [

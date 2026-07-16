@@ -7,7 +7,7 @@ import re
 import google.genai as genai
 
 from .gemini_rate_limit import mark_gemini_rate_limit_hit
-from .fit_prompt_requirements import SALARY_FIT_PROMPT_SECTION, TOP_FIT_SCORE_REQUIREMENTS_SECTION
+from .prompts import render_prompt
 
 FIT_SCORES = (
     'Very good fit',
@@ -37,26 +37,14 @@ Company overview (excerpt): {overview}
 Job description (excerpt):
 {desc}
 """
-    return f"""You are a professional career assistant. Compare the candidate's resume to each job below and assign a fit score per job.
-
-{TOP_FIT_SCORE_REQUIREMENTS_SECTION}
-
-{SALARY_FIT_PROMPT_SECTION}
-
-Resume data JSON (same candidate for all jobs):
-{resume_str}
-
-Jobs to analyze:
-{jobs_text}
-
-For each job, output exactly one object with:
-- "job_id": the exact "Title @ Company" string given for that job
-- "fit_score": one of {json.dumps(list(FIT_SCORES))}
-- "reasoning": one or two short sentences
-
-Respond with ONLY a JSON array of these objects, one per job, in the same order as the jobs above. No other text.
-Example: [{{"job_id": "Engineer @ Acme", "fit_score": "Good fit", "reasoning": "..."}}, ...]
-"""
+    return render_prompt(
+        "fit_score_batch",
+        top_fit_requirements=render_prompt("top_fit_score_requirements"),
+        salary_section=render_prompt("salary_fit"),
+        resume_json=resume_str,
+        jobs_text=jobs_text,
+        fit_scores_json=json.dumps(list(FIT_SCORES)),
+    )
 
 
 def analyze_jobs_batch(

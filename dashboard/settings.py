@@ -29,6 +29,7 @@ def _default_job_filters() -> dict:
         "general_settings": {"resume_theme": "engineeringclassic"},
         "search_parameters": [],
         "auto_filter_adjustment": {"enabled": False, "good_fit_threshold": 5},
+        "prompts": {},
     }
 
 
@@ -58,6 +59,8 @@ def _merge_with_defaults(filters: dict) -> dict:
     else:
         filters["auto_filter_adjustment"].setdefault("enabled", False)
         filters["auto_filter_adjustment"].setdefault("good_fit_threshold", 5)
+    if not isinstance(filters.get("prompts"), dict):
+        filters["prompts"] = {}
     return filters
 
 
@@ -178,7 +181,7 @@ def _coerce_location_priorities(df: pd.DataFrame) -> dict[str, int]:
 
 
 def render_settings_view() -> None:
-    """Render the Settings view (tabs: .env, Keywords, Locations, Sustainability, Search params, General, Import/Export, Reset)."""
+    """Render the Settings view (tabs: .env, Keywords, Locations, Sustainability, Search params, General, Prompts, Import/Export, Reset)."""
     app_root = get_app_root()
     env_path = app_root / ".env"
     env_map = _read_env_map(env_path)
@@ -210,7 +213,7 @@ def render_settings_view() -> None:
     tab_names = ["App config (.env)", "Keywords", "Locations"]
     if check_sustainability_enabled:
         tab_names.append("Sustainability")
-    tab_names += ["Search parameters", "General", "Import / Export", "Reset"]
+    tab_names += ["Search parameters", "General", "Prompts", "Import / Export", "Reset"]
     tabs = st.tabs(tab_names)
 
     # ---------------- App config (.env) ----------------
@@ -577,8 +580,66 @@ def render_settings_view() -> None:
         if not (app_root / "rendercv_themes.txt").exists():
             st.info("Provide the full theme list by creating `rendercv_themes.txt` in the app folder.")
 
-    # ---------------- Import / Export ----------------
+    # ---------------- Prompts ----------------
     with tabs[5 + offset]:
+        from utils.prompts import (
+            PROMPT_META,
+            get_prompt_template,
+            is_prompt_customized,
+            list_prompt_names,
+            reset_all_prompts,
+            reset_prompt,
+            save_prompt_overrides,
+        )
+
+        st.subheader("LLM prompts")
+        st.caption(
+            "Edit the templates used for local Gemini calls (fit scoring, search params, "
+            "bulk filter, sustainability). Use `{placeholder}` names listed under each prompt. "
+            "Double braces `{{` `}}` become literal `{` `}` in JSON examples. "
+            "Resume/cover-letter prompts on SERVER_URL are not editable here."
+        )
+        customized = [n for n in list_prompt_names() if is_prompt_customized(n)]
+        if customized:
+            st.info(f"Customized: {', '.join(customized)}")
+        else:
+            st.caption("All prompts are at defaults.")
+
+        if st.button("Reset all prompts to defaults", key="settings_reset_all_prompts"):
+            reset_all_prompts()
+            st.success("All prompts reset to defaults.")
+            st.rerun()
+
+        for name in list_prompt_names():
+            meta = PROMPT_META.get(name, {})
+            label = meta.get("label", name)
+            placeholders = meta.get("placeholders", "")
+            badge = " (customized)" if is_prompt_customized(name) else ""
+            with st.expander(f"{label}{badge}", expanded=False):
+                st.caption(f"Key: `{name}` · Placeholders: {placeholders}")
+                with st.form(f"settings_prompt_form_{name}", clear_on_submit=False):
+                    edited = st.text_area(
+                        "Template",
+                        value=get_prompt_template(name),
+                        height=280,
+                        label_visibility="collapsed",
+                    )
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        saved = st.form_submit_button("Save", use_container_width=True)
+                    with c2:
+                        reset = st.form_submit_button("Reset to default", use_container_width=True)
+                    if reset:
+                        reset_prompt(name)
+                        st.success(f"Reset `{name}` to default.")
+                        st.rerun()
+                    elif saved:
+                        save_prompt_overrides({name: edited})
+                        st.success(f"Saved `{name}`.")
+                        st.rerun()
+
+    # ---------------- Import / Export ----------------
+    with tabs[6 + offset]:
         st.subheader("Import / export (job_preferences.yaml)")
         st.download_button(
             label="Download YAML",
@@ -604,7 +665,7 @@ def render_settings_view() -> None:
                 st.error(f"Could not parse YAML: {e}")
 
     # ---------------- Reset ----------------
-    with tabs[6 + offset]:
+    with tabs[7 + offset]:
         st.subheader("Reset to defaults")
         st.warning("This will overwrite your current job preferences YAML.")
         if st.button("Reset job preferences to defaults", key="settings_reset_defaults"):

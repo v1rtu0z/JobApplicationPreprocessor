@@ -123,6 +123,7 @@ def _get_job_filters():
             'enabled': False,
             'good_fit_threshold': 5,
         },
+        'prompts': {},  # Optional LLM prompt overrides (see utils.prompts.DEFAULT_PROMPTS)
     }
 
     if os.path.exists(filter_path):
@@ -138,6 +139,8 @@ def _get_job_filters():
                 # Deduplicate before returning
                 filters = _deduplicate_filters(filters)
                 filters["search_parameters"] = _resolve_search_parameters(filters)
+                if not isinstance(filters.get("prompts"), dict):
+                    filters["prompts"] = {}
                 return filters
         except yaml.YAMLError as e:
             print(f"Error parsing {CONFIG_FILE} (invalid YAML): {e}")

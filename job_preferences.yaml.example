@@ -76,3 +76,11 @@ general_settings:
   # The theme used for generating the tailored resume PDF.
   # Options depend on what the CV rendering server supports (e.g., engineeringclassic)
   resume_theme: engineeringclassic
+
+# -----------------------------------------------------------------------------
+# LLM prompt overrides (optional)
+# -----------------------------------------------------------------------------
+# Leave empty to use built-in defaults. Edit in Dashboard → Settings → Prompts,
+# or paste overrides under named keys (fit_score_batch, jd_fit, search_parameters,
+# bulk_filter, sustainability_bulk, sustainability_single, salary_fit, etc.).
+# prompts: {}
