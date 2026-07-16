@@ -6,7 +6,7 @@ Applied is user-scoped: it blocks duplicates but never triggers a shared listing
 import pytest
 
 from local_storage import JobDatabase
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 from utils.storage import (
     build_repost_updates,
     get_existing_job_keys,
@@ -16,11 +16,11 @@ from utils.storage import (
 
 @pytest.fixture
 def job_db(tmp_path):
-    return JobDatabase(str(tmp_path / "jobs.db"), SHEET_HEADER)
+    return JobDatabase(str(tmp_path / "jobs.db"), JOB_COLUMNS)
 
 
 def _base_row(**extra):
-    row = {col: "" for col in SHEET_HEADER}
+    row = {col: "" for col in JOB_COLUMNS}
     row.update({
         "Company Name": "Acme",
         "Job Title": "Lead Engineer",

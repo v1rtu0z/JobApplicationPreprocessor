@@ -8,18 +8,6 @@ import html2text
 from config import _get_job_filters
 
 
-def column_index_to_letter(col_index: int) -> str:
-    """
-    Convert a 1-indexed column number to column letter(s).
-    E.g., 1 -> 'A', 2 -> 'B', 27 -> 'AA'
-    """
-    result = ""
-    while col_index > 0:
-        col_index, remainder = divmod(col_index - 1, 26)
-        result = chr(65 + remainder) + result
-    return result
-
-
 def html_to_markdown(html_text: str) -> str:
     """Convert HTML to Markdown"""
     h = html2text.HTML2Text()

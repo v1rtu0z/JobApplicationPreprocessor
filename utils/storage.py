@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from .schema import SHEET_HEADER
+from .schema import JOB_COLUMNS
 
 
 def setup_database(user_name: str):
@@ -10,7 +10,7 @@ def setup_database(user_name: str):
     from local_storage import JobDatabase
 
     db_path = Path("local_data") / "jobs.db"
-    db = JobDatabase(str(db_path), SHEET_HEADER)
+    db = JobDatabase(str(db_path), JOB_COLUMNS)
     print(f"Using local SQLite storage: {db_path}")
     return db
 
@@ -131,10 +131,3 @@ def parse_fit_score(job_analysis: str) -> str:
         if level in job_analysis:
             return level
     return 'Questionable fit'
-
-
-def update_cell(db, job_url: str, company_name: str, column_name: str, value: str):
-    """Helper to update a job field by job URL and company name."""
-    if not job_url or not company_name:
-        return
-    db.update_job_by_key(job_url, company_name, {column_name: value})

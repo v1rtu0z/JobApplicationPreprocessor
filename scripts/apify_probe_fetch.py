@@ -20,7 +20,7 @@ from core.sources.apify_source import _normalize_apify_item
 from local_storage import JobDatabase
 from pipeline.collection import _normalized_to_row_data
 from pipeline.filtering import _apply_keyword_filters, _apply_sustainability_keyword_filters, _normalize_job_title
-from utils import SHEET_HEADER, get_existing_job_keys, apify_state
+from utils import JOB_COLUMNS, get_existing_job_keys, apify_state
 from utils.apify_client import fetch_jobs_via_apify, format_apify_usage, get_apify_usage_summary
 
 
@@ -62,7 +62,7 @@ def run_probe_search(
     rejected: list[tuple[str, str, str]] = []
     duplicates: list[tuple[str, str]] = []
     new_rows = []
-    date_idx = SHEET_HEADER.index("Date added")
+    date_idx = JOB_COLUMNS.index("Date added")
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     for item in raw_items:
@@ -99,7 +99,7 @@ def run_probe_search(
         accepted.append((title, company, location))
 
     if new_rows:
-        db.append_rows(new_rows)
+        db.add_jobs_from_rows(new_rows)
 
     print(f"  Raw: {len(raw_items)} | dupes: {len(duplicates)} | filtered: {len(rejected)} | added: {len(new_rows)}")
     for title, company, location in accepted[:10]:
@@ -159,7 +159,7 @@ def main() -> int:
     print(_usage_line("Before", before))
 
     db_path = ROOT / "local_data" / "jobs.db"
-    db = JobDatabase(str(db_path), SHEET_HEADER)
+    db = JobDatabase(str(db_path), JOB_COLUMNS)
     existing = get_existing_job_keys(db)
 
     totals = {"raw": 0, "duplicates": 0, "rejected": 0, "added": 0}

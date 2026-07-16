@@ -1,6 +1,6 @@
 """Job table schema and column definitions."""
 
-SHEET_HEADER = [
+JOB_COLUMNS = [
     'Company Name', 'Job Title', 'Location', 'Location Priority', 'Job Description', 'Job URL', 'Company URL',
     'Company overview', 'Sustainable company', 'Sustainability keyword matches', 'CO fetch attempted', 'JD crawl attempted',
     'Fit score', 'Fit score enum', 'JD fit score', 'JD fit reasoning', 'Bulk filtered', 'Job analysis', 'Tailored resume url', 'Tailored resume json',

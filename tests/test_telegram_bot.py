@@ -5,17 +5,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from local_storage import JobDatabase
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 from utils import telegram_bot as tg
 
 
 @pytest.fixture
 def job_db(tmp_path):
-    return JobDatabase(str(tmp_path / "jobs.db"), SHEET_HEADER)
+    return JobDatabase(str(tmp_path / "jobs.db"), JOB_COLUMNS)
 
 
 def _ready_job(**extra):
-    row = {col: "" for col in SHEET_HEADER}
+    row = {col: "" for col in JOB_COLUMNS}
     row.update({
         "Company Name": "Acme Corp",
         "Job Title": "Python Engineer",

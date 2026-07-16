@@ -21,8 +21,8 @@ class JobAnalysisService:
         job_row: full row dict (e.g. from get_all_records).
         """
         from pipeline.analysis import analyze_single_job
-        sheet = self._repo.store
-        return analyze_single_job(sheet, job_row, resume_json)
+        db = self._repo.store
+        return analyze_single_job(db, job_row, resume_json)
 
     def analyze_all(
         self,
@@ -34,5 +34,5 @@ class JobAnalysisService:
         target_jobs: optional list of (job_url, company_name) to limit scope.
         """
         from pipeline.analysis import analyze_all_jobs
-        sheet = self._repo.store
-        return analyze_all_jobs(sheet, resume_json, target_jobs=target_jobs)
+        db = self._repo.store
+        return analyze_all_jobs(db, resume_json, target_jobs=target_jobs)

@@ -8,7 +8,7 @@ import streamlit as st
 from dotenv import dotenv_values
 
 from local_storage import JobDatabase
-from utils import SHEET_HEADER, get_user_name
+from utils import JOB_COLUMNS, get_user_name
 from api_methods import get_resume_json
 from setup_server import get_app_root
 
@@ -100,7 +100,7 @@ def load_job_data():
         if not db_path.exists():
             return None, "No job data found. Please run the main application first."
 
-        db = JobDatabase(str(db_path), SHEET_HEADER)
+        db = JobDatabase(str(db_path), JOB_COLUMNS)
         records = db.get_all_records()
 
         if not records:
@@ -118,7 +118,7 @@ def update_job_field(job_url_key: str, company_key: str, field_name: str, value:
     if not db_path.exists():
         return 0
 
-    db = JobDatabase(str(db_path), SHEET_HEADER)
+    db = JobDatabase(str(db_path), JOB_COLUMNS)
     return db.update_job_by_key(job_url_key, company_key, {field_name: value})
 
 

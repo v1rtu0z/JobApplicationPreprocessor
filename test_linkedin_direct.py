@@ -19,7 +19,7 @@ from selenium.webdriver.common.by import By
 sys.path.insert(0, str(Path(__file__).parent))
 
 from local_storage import JobDatabase
-from utils import SHEET_HEADER
+from utils import JOB_COLUMNS
 
 # Delay settings (seconds)
 MIN_DELAY_BETWEEN_COMPANIES = 12
@@ -288,7 +288,7 @@ def main():
         print(f"Database not found at {db_path}")
         return
     
-    db = JobDatabase(str(db_path), SHEET_HEADER)
+    db = JobDatabase(str(db_path), JOB_COLUMNS)
     
     # Build overview cache from existing data
     print("\nBuilding overview cache from existing database entries...")

@@ -1,8 +1,8 @@
-"""JobRepository: DAO for job storage (wraps JobDatabase / sheet)."""
+"""JobRepository: DAO for job storage (wraps JobDatabase)."""
 
 from typing import Any
 
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 
 from .models import Job
 
@@ -55,14 +55,14 @@ class JobRepository:
         return keys
 
     def add_jobs(self, jobs: list[dict[str, str]]) -> None:
-        """Append jobs from row dicts (keys = SHEET_HEADER column names)."""
+        """Append jobs from row dicts (keys match job-table column names)."""
         if not jobs:
             return
         if hasattr(self._store, "add_jobs"):
             self._store.add_jobs(jobs)
-        elif hasattr(self._store, "append_rows"):
-            rows = [[job.get(col, "") for col in SHEET_HEADER] for job in jobs]
-            self._store.append_rows(rows)
+        elif hasattr(self._store, "add_jobs_from_rows"):
+            rows = [[job.get(col, "") for col in JOB_COLUMNS] for job in jobs]
+            self._store.add_jobs_from_rows(rows)
 
     def add_jobs_from_models(self, jobs: list[Job]) -> None:
         """Append jobs from domain models."""

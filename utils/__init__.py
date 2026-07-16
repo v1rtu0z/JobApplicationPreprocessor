@@ -3,7 +3,7 @@ Utils package: schema, parsing, Apify client, sustainability, storage.
 Re-exports all public names for backward compatibility with `from utils import ...` and `import utils`.
 """
 
-from .schema import SHEET_HEADER
+from .schema import JOB_COLUMNS
 
 from .gemini_rate_limit import (
     gemini_rate_limit_hit,
@@ -12,7 +12,6 @@ from .gemini_rate_limit import (
 )
 
 from .parsing import (
-    column_index_to_letter,
     extract_job_id,
     fit_score_to_enum,
     get_location_priority,
@@ -34,7 +33,7 @@ from .apify_client import (
 )
 
 from .sustainability import (
-    get_sustainability_from_sheet,
+    get_sustainability_from_db,
     is_sustainable_company,
     is_sustainable_company_bulk,
     validate_sustainability_for_unprocessed_jobs,
@@ -44,15 +43,13 @@ from .storage import (
     get_existing_job_keys,
     parse_fit_score,
     setup_database,
-    update_cell,
 )
 
 __all__ = [
-    'SHEET_HEADER',
+    'JOB_COLUMNS',
     'gemini_rate_limit_hit',
     'mark_gemini_rate_limit_hit',
     'reset_gemini_rate_limit_flag',
-    'column_index_to_letter',
     'extract_job_id',
     'fit_score_to_enum',
     'get_location_priority',
@@ -68,12 +65,11 @@ __all__ = [
     'get_company_overviews_bulk_via_apify',
     'match_job_to_apify_result',
     'rate_limit',
-    'get_sustainability_from_sheet',
+    'get_sustainability_from_db',
     'is_sustainable_company',
     'is_sustainable_company_bulk',
     'validate_sustainability_for_unprocessed_jobs',
     'get_existing_job_keys',
     'parse_fit_score',
     'setup_database',
-    'update_cell',
 ]

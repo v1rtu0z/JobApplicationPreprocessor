@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
 from local_storage import JobDatabase, save_resume_local
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 from utils.telegram_bot import (
     is_enabled,
     notify_ready_applications,
@@ -74,7 +74,7 @@ def _ensure_dummy_job(db: JobDatabase) -> int:
         "are working correctly.\n\n"
         "Best regards,\nTest User"
     )
-    row = {col: "" for col in SHEET_HEADER}
+    row = {col: "" for col in JOB_COLUMNS}
     row.update({
         "Company Name": DUMMY_COMPANY,
         "Job Title": DUMMY_TITLE,
@@ -97,7 +97,7 @@ def main() -> int:
         print("TELEGRAM_BOT_TOKEN is not set in .env — add it and retry.")
         return 1
 
-    db = JobDatabase(str(ROOT / "local_data" / "jobs.db"), SHEET_HEADER)
+    db = JobDatabase(str(ROOT / "local_data" / "jobs.db"), JOB_COLUMNS)
     start_update_listener(lambda: db)
 
     chat_id = resolve_chat_id()

@@ -81,7 +81,7 @@ def _build_sustainability_cache(db):
     return cache
 
 
-def get_sustainability_from_sheet(company_name: str, db, cache: dict = None) -> str | None:
+def get_sustainability_from_db(company_name: str, db, cache: dict = None) -> str | None:
     """Check if sustainability status is already known for a company."""
     if cache is None:
         cache = _build_sustainability_cache(db)
@@ -131,11 +131,11 @@ def is_sustainable_company_bulk(companies_data: list[dict], db=None) -> dict[str
     for data in companies_data:
         name = data['company_name']
         if db and sustainability_cache:
-            cached_result = get_sustainability_from_sheet(name, db, cache=sustainability_cache)
+            cached_result = get_sustainability_from_db(name, db, cache=sustainability_cache)
             if cached_result is not None:
                 results[name] = {
                     'is_sustainable': cached_result == 'TRUE',
-                    'reasoning': 'Cached from sheet'
+                    'reasoning': 'Cached from database'
                 }
                 continue
 
@@ -205,7 +205,7 @@ def is_sustainable_company(company_name: str, company_overview: str, job_descrip
     """Determine if a company is sustainable. Checks cache first to avoid redundant API calls."""
     if db:
         sustainability_cache = _build_sustainability_cache(db)
-        cached_result = get_sustainability_from_sheet(company_name, db, cache=sustainability_cache)
+        cached_result = get_sustainability_from_db(company_name, db, cache=sustainability_cache)
         if cached_result is not None:
             return cached_result == 'TRUE'
 

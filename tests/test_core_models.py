@@ -3,7 +3,7 @@
 import pytest
 
 from core.models import Job, Company
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 
 
 class TestCompany:
@@ -61,7 +61,7 @@ class TestJob:
         row = {"Company Name": "A", "Job Title": "T", "Job URL": "U"}
         job = Job.from_row(row)
         out = job.to_row()
-        for col in SHEET_HEADER:
+        for col in JOB_COLUMNS:
             assert col in out
         assert out["Company Name"] == "A"
         assert out["Job Title"] == "T"

@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from utils import (
-    SHEET_HEADER,
+    JOB_COLUMNS,
     extract_job_id,
     fetch_job_details_bulk_via_apify,
     normalize_company_name,
@@ -52,7 +52,7 @@ def run_migration():
     verify_apify_connectivity()
 
     print("\nStep 2: Starting bulk description population...")
-    db = JobDatabase(str(db_path), SHEET_HEADER)
+    db = JobDatabase(str(db_path), JOB_COLUMNS)
     all_rows = db.get_all_records()
     
     # Find jobs missing descriptions

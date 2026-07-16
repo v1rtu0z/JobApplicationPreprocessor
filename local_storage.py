@@ -308,32 +308,9 @@ class JobDatabase:
             conn.close()
 
     def get_all_records(self) -> list[dict[str, str]]:
-        """Return all jobs as list of dicts (column name -> value), without internal _id."""
+        """Return all jobs as column→value dicts (no internal ``_id``). Thin view over ``get_all_jobs()``."""
         jobs = self.get_all_jobs()
         return [{k: v for k, v in job.items() if k != '_id'} for job in jobs]
-
-    def append_rows(self, rows: list[list[str]]):
-        """Add multiple jobs from row data (list of values in column order). Alias for add_jobs_from_rows()."""
-        self.add_jobs_from_rows(rows)
-
-    def update_record_by_fields(self, filter_dict: dict[str, str], update_dict: dict[str, str]) -> int:
-        """Legacy: Update records matching filter criteria."""
-        if not filter_dict or not update_dict:
-            return 0
-        
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            set_clause = ", ".join([f'"{k}" = ?' for k in update_dict.keys()])
-            where_clause = " AND ".join([f'"{k}" = ?' for k in filter_dict.keys()])
-            values = [str(v) if v is not None else '' for v in update_dict.values()]
-            values += [str(v) if v is not None else '' for v in filter_dict.values()]
-            cursor.execute(f'UPDATE jobs SET {set_clause} WHERE {where_clause}', values)
-            row_count = cursor.rowcount
-            conn.commit()
-            return row_count
-        finally:
-            conn.close()
 
 
 # =========================================================================

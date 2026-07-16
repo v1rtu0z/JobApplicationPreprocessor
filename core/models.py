@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 
 # Default empty value for any schema column
 _EMPTY = ""
@@ -66,7 +66,7 @@ class Job:
             row = {}
         self._row = {k: (str(v).strip() if v is not None else _EMPTY) for k, v in row.items()}
         # Ensure all schema columns exist
-        for col in SHEET_HEADER:
+        for col in JOB_COLUMNS:
             if col not in self._row:
                 self._row[col] = _EMPTY
 
@@ -153,8 +153,8 @@ class Job:
         return self._row.get(column, default)
 
     def to_row(self) -> dict[str, str]:
-        """Return a full row dict with all SHEET_HEADER keys (no _id)."""
-        return {col: self._row.get(col, _EMPTY) for col in SHEET_HEADER}
+        """Return a full row dict with all job-table column keys (no _id)."""
+        return {col: self._row.get(col, _EMPTY) for col in JOB_COLUMNS}
 
     def to_row_with_id(self, job_id: int | None = None) -> dict[str, Any]:
         """Row dict including _id if present or passed."""
@@ -174,7 +174,7 @@ class Job:
 
     @classmethod
     def from_row(cls, row: dict[str, Any] | None) -> Job:
-        """Build a Job from a storage row (dict with SHEET_HEADER keys, optionally _id)."""
+        """Build a Job from a storage row (job-table column keys, optionally _id)."""
         if not row:
             return cls(row={})
         # Strip _id for the model; it's storage-specific

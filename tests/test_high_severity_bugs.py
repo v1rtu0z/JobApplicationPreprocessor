@@ -7,13 +7,13 @@ import pytest
 
 from local_storage import JobDatabase
 from utils.apify_client import fetch_jobs_via_apify, match_job_to_apify_result, apify_jobs_search_is_cached
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 from utils.sustainability import is_sustainable_company, validate_sustainability_for_unprocessed_jobs
 
 
 @pytest.fixture
 def job_db(tmp_path):
-    db = JobDatabase(str(tmp_path / "jobs.db"), SHEET_HEADER)
+    db = JobDatabase(str(tmp_path / "jobs.db"), JOB_COLUMNS)
     return db
 
 
@@ -26,7 +26,7 @@ def isolated_job_filters(tmp_path, monkeypatch):
 
 
 def _sample_job(company, title, url, **extra):
-    row = {col: "" for col in SHEET_HEADER}
+    row = {col: "" for col in JOB_COLUMNS}
     row.update({
         "Company Name": company,
         "Job Title": title,

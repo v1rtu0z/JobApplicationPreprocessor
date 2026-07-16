@@ -7,7 +7,7 @@ from utils import (
     get_existing_job_keys,
     parse_location,
     get_location_priority,
-    SHEET_HEADER,
+    JOB_COLUMNS,
 )
 from utils.storage import build_repost_updates, get_expired_jobs_by_key
 from config import _get_job_filters, _save_job_filters, CONFIG_FILE
@@ -27,7 +27,7 @@ from .resumes import process_resumes_and_cover_letters
 
 
 def _normalized_to_row_dict(normalized: dict, filters: dict) -> dict[str, str] | None:
-    """Build a SHEET_HEADER row dict from a normalized job item. Returns None if should skip."""
+    """Build a job-table row dict from a normalized job item. Returns None if should skip."""
     job_title = _normalize_job_title(normalized.get("job_title", ""))
     company_name = (normalized.get("company_name") or "").strip()
     job_url = (normalized.get("job_url") or "").strip()
@@ -47,7 +47,7 @@ def _normalized_to_row_dict(normalized: dict, filters: dict) -> dict[str, str] |
         return None
     clean_location = parse_location(raw_location) if raw_location else ""
     location_priority = get_location_priority(clean_location)
-    row = {col: "" for col in SHEET_HEADER}
+    row = {col: "" for col in JOB_COLUMNS}
     row.update({
         "Company Name": company_name,
         "Job Title": job_title,
@@ -65,11 +65,11 @@ def _normalized_to_row_dict(normalized: dict, filters: dict) -> dict[str, str] |
 
 
 def _normalized_to_row_data(normalized: dict, filters: dict) -> list[str] | None:
-    """Build SHEET_HEADER row list from a normalized job item. Returns None if should skip."""
+    """Build an ordered job-table value list from a normalized job item. Returns None if should skip."""
     row = _normalized_to_row_dict(normalized, filters)
     if not row:
         return None
-    return [row[col] for col in SHEET_HEADER]
+    return [row[col] for col in JOB_COLUMNS]
 
 
 def collect_jobs_via_apify(db, search_url=None, params=None):
@@ -136,7 +136,7 @@ def collect_jobs_via_apify(db, search_url=None, params=None):
                         continue
                     # Fall through to insert if the update matched nothing (row vanished).
 
-                new_rows.append([row_dict[col] for col in SHEET_HEADER])
+                new_rows.append([row_dict[col] for col in JOB_COLUMNS])
                 existing_jobs.add(job_key)
                 new_job_identifiers.append((row_dict["Job URL"], row_dict["Company Name"]))
                 print(f"Collected job via Apify: {job_key}")
@@ -144,7 +144,7 @@ def collect_jobs_via_apify(db, search_url=None, params=None):
                 print(f"Unexpected error processing Apify job item: {e}")
 
     if new_rows:
-        db.append_rows(new_rows)
+        db.add_jobs_from_rows(new_rows)
         print(f"Successfully added {len(new_rows)} jobs.")
     if repost_count:
         print(f"Updated {repost_count} expired reposted job(s) in place.")

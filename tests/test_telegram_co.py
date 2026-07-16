@@ -5,13 +5,13 @@ import json
 import pytest
 
 from local_storage import JobDatabase
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 from utils import telegram_bot as tg
 
 
 @pytest.fixture
 def job_db(tmp_path, monkeypatch):
-    db = JobDatabase(str(tmp_path / "jobs.db"), SHEET_HEADER)
+    db = JobDatabase(str(tmp_path / "jobs.db"), JOB_COLUMNS)
     pending = tmp_path / "pending.json"
     skipped = tmp_path / "skipped.json"
     monkeypatch.setattr(tg, "PENDING_CO_FILE", pending)
@@ -21,7 +21,7 @@ def job_db(tmp_path, monkeypatch):
 
 
 def _co_job(company, title, url, jd_fit="8", **extra):
-    row = {col: "" for col in SHEET_HEADER}
+    row = {col: "" for col in JOB_COLUMNS}
     row.update({
         "Company Name": company,
         "Job Title": title,

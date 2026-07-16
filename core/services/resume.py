@@ -22,8 +22,8 @@ class ResumeGenerationService:
     ) -> bool:
         """Generate or regenerate cover letter for one job. Returns True if work was done."""
         from pipeline.resumes import process_cover_letter
-        sheet = self._repo.store
-        return process_cover_letter(sheet, job_row, resume_json)
+        db = self._repo.store
+        return process_cover_letter(db, job_row, resume_json)
 
     def process_resume(
         self,
@@ -32,8 +32,8 @@ class ResumeGenerationService:
     ) -> bool:
         """Generate or regenerate tailored resume for one job. Returns True if work was done."""
         from pipeline.resumes import process_resume
-        sheet = self._repo.store
-        return process_resume(sheet, job_row, resume_json)
+        db = self._repo.store
+        return process_resume(db, job_row, resume_json)
 
     def process_resumes_and_cover_letters(
         self,
@@ -42,5 +42,5 @@ class ResumeGenerationService:
     ) -> int:
         """Process resumes and cover letters for good-fit jobs. Returns count processed."""
         from pipeline.resumes import process_resumes_and_cover_letters
-        sheet = self._repo.store
-        return process_resumes_and_cover_letters(sheet, resume_json, target_jobs=target_jobs)
+        db = self._repo.store
+        return process_resumes_and_cover_letters(db, resume_json, target_jobs=target_jobs)

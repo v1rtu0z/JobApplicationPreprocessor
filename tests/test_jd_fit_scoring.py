@@ -10,16 +10,16 @@ from pipeline.jd_fit_scoring import (
     score_jobs_by_jd_fit,
     should_run_jd_only_fit_scoring,
 )
-from utils.schema import SHEET_HEADER
+from utils.schema import JOB_COLUMNS
 
 
 @pytest.fixture
 def job_db(tmp_path):
-    return JobDatabase(str(tmp_path / "jobs.db"), SHEET_HEADER)
+    return JobDatabase(str(tmp_path / "jobs.db"), JOB_COLUMNS)
 
 
 def _job(**kwargs):
-    row = {col: "" for col in SHEET_HEADER}
+    row = {col: "" for col in JOB_COLUMNS}
     row.update({
         "Company Name": "Acme",
         "Job Title": "Engineer",

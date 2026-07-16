@@ -21,7 +21,7 @@ from selenium.webdriver.common.by import By
 sys.path.insert(0, str(Path(__file__).parent))
 
 from local_storage import JobDatabase
-from utils import SHEET_HEADER
+from utils import JOB_COLUMNS
 
 # ============================================================================
 # Configuration
@@ -285,7 +285,7 @@ def run_interactive_test():
         print(f"\nError: Database not found at {DB_PATH}")
         return
     
-    db = JobDatabase(str(DB_PATH), SHEET_HEADER)
+    db = JobDatabase(str(DB_PATH), JOB_COLUMNS)
     
     # Get test jobs
     jobs = get_jobs_needing_description(db, limit=5)
