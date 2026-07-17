@@ -76,6 +76,7 @@ class TestCallbackHandling:
         updated = job_db.get_job_by_id(job["_id"])
         assert updated["Applied"] == "TRUE"
         assert updated["Telegram app completed"] == "TRUE"
+        assert updated.get("Applied at", "").endswith("Z")
         assert not any(c[0] == "sendMessage" and "expired" in c[1].get("text", "").lower() for c in calls)
 
     def test_q1_no_asks_expired(self, job_db, monkeypatch):
@@ -126,6 +127,7 @@ class TestCallbackHandling:
         assert updated["Bad analysis"] == "TRUE"
         assert updated["Telegram app completed"] == "TRUE"
         assert updated.get("Telegram notified") != "TRUE"
+        assert updated.get("Bad analysis reported at", "").endswith("Z")
         assert not any(c[0] == "sendMessage" and "expired" in c[1].get("text", "").lower() for c in calls)
         assert any(c[0] == "sendMessage" and "bad analysis" in c[1].get("text", "").lower() for c in calls)
 
@@ -150,6 +152,7 @@ class TestCallbackHandling:
         updated = job_db.get_job_by_id(job["_id"])
         assert updated["Job posting expired"] == "TRUE"
         assert updated["Telegram app completed"] == "TRUE"
+        assert updated.get("Expired at", "").endswith("Z")
 
 
 class TestCallbackFingerprint:

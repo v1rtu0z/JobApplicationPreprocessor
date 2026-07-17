@@ -9,6 +9,7 @@ from dotenv import dotenv_values
 
 from local_storage import JobDatabase
 from utils import JOB_COLUMNS, get_user_name
+from utils.schema import with_status_timestamps
 from api_methods import get_resume_json
 from setup_server import get_app_root
 
@@ -112,14 +113,16 @@ def load_job_data():
         return None, f"Error loading data: {str(e)}"
 
 
-def update_job_field(job_url_key: str, company_key: str, field_name: str, value: str) -> int:
-    """Update a single field for a job in the database."""
+def update_job_field(job_url_key: str, company_key: str, field_name: str, value: str) -> dict[str, str]:
+    """Update a field for a job (plus companion status timestamps). Returns the dict written."""
     db_path = Path("local_data") / "jobs.db"
     if not db_path.exists():
-        return 0
+        return {}
 
+    updates = with_status_timestamps({field_name: value})
     db = JobDatabase(str(db_path), JOB_COLUMNS)
-    return db.update_job_by_key(job_url_key, company_key, {field_name: value})
+    rows = db.update_job_by_key(job_url_key, company_key, updates)
+    return updates if rows else {}
 
 
 def handle_field_update(
@@ -132,15 +135,16 @@ def handle_field_update(
 ) -> None:
     """Helper to handle field updates with robust refresh logic."""
     if new_value != current_value:
-        rows_affected = update_job_field(job_url_key, company_key, field_name, new_value)
-        if rows_affected > 0:
+        written = update_job_field(job_url_key, company_key, field_name, new_value)
+        if written:
             st.success(success_msg)
             if "df" in st.session_state:
                 df = st.session_state.df
                 mask = (df.get("Job URL", "") == job_url_key) & (
                     df.get("Company Name", "") == company_key
                 )
-                df.loc[mask, field_name] = new_value
+                for col, val in written.items():
+                    df.loc[mask, col] = val
                 st.session_state.df = df
                 if "filter_options_cache" in st.session_state:
                     del st.session_state.filter_options_cache

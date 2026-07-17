@@ -106,10 +106,11 @@ def _handle_undo() -> None:
         job_key, field_name, old_value, job_url_key, company_key, company, job_title = (
             st.session_state.undo_stack.pop()
         )
-        update_job_field(job_url_key, company_key, field_name, old_value)
+        written = update_job_field(job_url_key, company_key, field_name, old_value)
         df = st.session_state.df
         mask = (df.get("Job URL", "") == job_url_key) & (df.get("Company Name", "") == company_key)
-        df.loc[mask, field_name] = old_value
+        for col, val in written.items():
+            df.loc[mask, col] = val
         st.session_state.df = df
         st.session_state.hidden_jobs.discard(job_key)
         if not st.session_state.undo_stack:
@@ -192,10 +193,11 @@ def render_jobs_view(sidebar_slot=None) -> None:
         if key not in st.session_state:
             return
         new_val = st.session_state[key]
-        update_job_field(job_url_key, company_key, field_name, "TRUE" if new_val else "FALSE")
+        written = update_job_field(job_url_key, company_key, field_name, "TRUE" if new_val else "FALSE")
         df = st.session_state.df
         mask = (df.get("Job URL", "") == job_url_key) & (df.get("Company Name", "") == company_key)
-        df.loc[mask, field_name] = "TRUE" if new_val else "FALSE"
+        for col, val in written.items():
+            df.loc[mask, col] = val
         st.session_state.df = df
 
         should_hide = False

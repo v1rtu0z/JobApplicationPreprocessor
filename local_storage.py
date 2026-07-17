@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+from utils.schema import with_status_timestamps
+
 
 class JobDatabase:
     """
@@ -156,6 +158,8 @@ class JobDatabase:
         """
         if not updates:
             return
+
+        updates = with_status_timestamps(updates)
         
         conn = self._get_connection()
         try:
@@ -181,6 +185,8 @@ class JobDatabase:
         """
         if not updates:
             return 0
+
+        updates = with_status_timestamps(updates)
         
         conn = self._get_connection()
         try:
@@ -212,6 +218,7 @@ class JobDatabase:
         
         for job_id, update_dict in updates:
             if update_dict:
+                update_dict = with_status_timestamps(update_dict)
                 set_clause = ", ".join([f'"{k}" = ?' for k in update_dict.keys()])
                 values = [str(v) if v is not None else '' for v in update_dict.values()]
                 cursor.execute(f'UPDATE jobs SET {set_clause} WHERE id = ?', values + [job_id])
@@ -234,6 +241,7 @@ class JobDatabase:
         
         for job_url, company_name, update_dict in updates:
             if update_dict:
+                update_dict = with_status_timestamps(update_dict)
                 set_clause = ", ".join([f'"{k}" = ?' for k in update_dict.keys()])
                 values = [str(v) if v is not None else '' for v in update_dict.values()]
                 cursor.execute(

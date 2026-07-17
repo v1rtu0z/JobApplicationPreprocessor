@@ -73,7 +73,10 @@ class TestBuildRepostUpdates:
         assert updates["Job URL"] == "https://example.com/jobs/new"
         assert updates["Job Description"] == "Fresh JD"
         assert updates["Job posting expired"] == ""
+        assert updates["Expired at"] == ""
         assert "Applied" not in updates  # user-scoped — never part of shared refresh
+        assert updates["Bad analysis"] == ""
+        assert updates["Bad analysis reported at"] == ""
         assert updates["Fit score"] == ""
         assert updates["Tailored resume url"] == ""
         assert updates["Telegram notified"] == ""
