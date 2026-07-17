@@ -269,8 +269,14 @@ def _run_processing_cycle(db, resume_json, company_overview_cache, shutdown_requ
         print("\nUseless cycle (no progress made).")
 
     print("\nFinalizing processing cycle...")
-    print("\nSorting database by fit score and location priority...")
-    sort_specs = [('JD fit score', False), ('Fit score enum', False), ('Location Priority', True)]
+    print("\nSorting database by fit score, easy apply, date posted, and location priority...")
+    sort_specs = [
+        ('JD fit score', False),
+        ('Fit score enum', False),
+        ('Easy apply', False),
+        ('Date posted', False),
+        ('Location Priority', True),
+    ]
     db.sort_by(sort_specs)
 
     from .auto_filter_adjustment import maybe_auto_adjust_filters
@@ -322,7 +328,13 @@ def main():
                 if should_run_jd_only_fit_scoring(db):
                     scored = score_jobs_by_jd_fit(db, resume_json)
                     if scored > 0:
-                        db.sort_by([('JD fit score', False), ('Fit score enum', False), ('Location Priority', True)])
+                        db.sort_by([
+                            ('JD fit score', False),
+                            ('Fit score enum', False),
+                            ('Easy apply', False),
+                            ('Date posted', False),
+                            ('Location Priority', True),
+                        ])
                         progress_made_in_cycle = True
                         sleep_controller.reset_to_base()
 

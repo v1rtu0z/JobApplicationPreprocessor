@@ -258,7 +258,7 @@ class JobDatabase:
         
         Args:
             sort_specs: List of (column_name, ascending) tuples
-                Example: [('Fit score enum', False), ('Location Priority', True)]
+                Example: [('Fit score enum', False), ('Date posted', False), ('Location Priority', True)]
         """
         if not sort_specs:
             return
@@ -270,6 +270,7 @@ class JobDatabase:
             cursor.execute('BEGIN IMMEDIATE')
 
             # Build ORDER BY clause
+            # Easy apply: TRUE first when descending (lexicographic TRUE > FALSE > '').
             numeric_columns = {'Location Priority', 'Fit score enum', 'JD fit score'}
             order_clauses = []
 
@@ -277,6 +278,10 @@ class JobDatabase:
                 direction = 'ASC' if ascending else 'DESC'
                 if col_name in numeric_columns:
                     order_clauses.append(f'CAST(COALESCE("{col_name}", "0") AS INTEGER) {direction}')
+                elif col_name == 'Easy apply':
+                    order_clauses.append(
+                        f'CASE WHEN UPPER(COALESCE("{col_name}", "")) = \'TRUE\' THEN 1 ELSE 0 END {direction}'
+                    )
                 else:
                     order_clauses.append(f'"{col_name}" {direction}')
 

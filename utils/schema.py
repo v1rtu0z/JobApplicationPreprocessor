@@ -9,7 +9,7 @@ JOB_COLUMNS = [
     'Resume feedback',
     'Resume feedback addressed', 'Tailored cover letter (to be humanized)', 'CL feedback',
     'CL feedback addressed', 'Applied', 'Applied at', 'Bad analysis', 'Bad analysis reported at',
-    'Job posting expired', 'Expired at', 'Date added', 'Last expiration check',
+    'Job posting expired', 'Expired at', 'Date added', 'Date posted', 'Easy apply', 'Last expiration check',
     'Telegram notified', 'Telegram app completed'
 ]
 

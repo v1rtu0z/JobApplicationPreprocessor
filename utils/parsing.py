@@ -1,6 +1,7 @@
 """Text parsing, location, fit score, company name, and URL helpers."""
 
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import html2text
@@ -27,6 +28,81 @@ def parse_location(raw_location: str) -> str:
     # Split by middle dot and take first part
     location_part = raw_location.split('·')[0].strip()
     return location_part
+
+
+_RELATIVE_POSTED_RE = re.compile(
+    r"""
+    ^(?:posted\s+|reposted\s+)?
+    (?:
+        (?P<just>just\s+now|today)
+        |(?P<yesterday>yesterday)
+        |(?P<num>\d+)\s*(?P<unit>minute|hour|day|week|month|year)s?\s*ago
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_ISO_DATE_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})')
+
+
+def normalize_posted_at(raw: str | None, *, now: datetime | None = None) -> str:
+    """Normalize Apify ``posted_at`` to ``YYYY-MM-DD`` for storage and sorting.
+
+    Accepts ISO dates, date-times, and LinkedIn-style relative strings
+    (``2 days ago``, ``Reposted 1 week ago``, ``Just now``). Returns ``""`` if unknown.
+    """
+    text = (raw or '').strip()
+    if not text:
+        return ''
+
+    iso = _ISO_DATE_RE.match(text)
+    if iso:
+        try:
+            datetime.strptime(iso.group(1), '%Y-%m-%d')
+            return iso.group(1)
+        except ValueError:
+            pass
+
+    ref = now or datetime.now(timezone.utc)
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=timezone.utc)
+
+    match = _RELATIVE_POSTED_RE.match(text)
+    if not match:
+        return ''
+
+    if match.group('just'):
+        return ref.date().isoformat()
+    if match.group('yesterday'):
+        return (ref.date() - timedelta(days=1)).isoformat()
+
+    num = int(match.group('num'))
+    unit = match.group('unit').lower()
+    delta = {
+        'minute': timedelta(minutes=num),
+        'hour': timedelta(hours=num),
+        'day': timedelta(days=num),
+        'week': timedelta(weeks=num),
+        'month': timedelta(days=30 * num),
+        'year': timedelta(days=365 * num),
+    }.get(unit)
+    if delta is None:
+        return ''
+    return (ref - delta).date().isoformat()
+
+
+def normalize_easy_apply(value) -> str:
+    """Normalize Easy Apply flags to ``TRUE`` / ``FALSE`` / ``""``."""
+    if value is True:
+        return 'TRUE'
+    if value is False:
+        return 'FALSE'
+    text = str(value or '').strip().lower()
+    if text in ('true', '1', 'yes', 'y'):
+        return 'TRUE'
+    if text in ('false', '0', 'no', 'n'):
+        return 'FALSE'
+    return ''
 
 
 def get_location_priority(location: str) -> int:

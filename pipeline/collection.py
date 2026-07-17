@@ -60,6 +60,8 @@ def _normalized_to_row_dict(normalized: dict, filters: dict) -> dict[str, str] |
         "JD crawl attempted": "FALSE",
         "Bulk filtered": "FALSE",
         "Date added": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "Date posted": (normalized.get("date_posted") or "").strip(),
+        "Easy apply": (normalized.get("easy_apply") or "").strip(),
     })
     return row
 

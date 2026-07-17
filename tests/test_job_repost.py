@@ -67,11 +67,13 @@ class TestBuildRepostUpdates:
             "Job Title": "Lead Engineer",
             "Company Name": "Acme",
             "Date added": "2026-07-16",
+            "Date posted": "2026-07-10",
         }
         updates = build_repost_updates(old, new_fields)
 
         assert updates["Job URL"] == "https://example.com/jobs/new"
         assert updates["Job Description"] == "Fresh JD"
+        assert updates["Date posted"] == "2026-07-10"
         assert updates["Job posting expired"] == ""
         assert updates["Expired at"] == ""
         assert "Applied" not in updates  # user-scoped — never part of shared refresh

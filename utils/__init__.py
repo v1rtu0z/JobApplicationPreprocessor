@@ -18,6 +18,8 @@ from .parsing import (
     get_user_name,
     html_to_markdown,
     normalize_company_name,
+    normalize_easy_apply,
+    normalize_posted_at,
     parse_location,
 )
 
@@ -56,6 +58,8 @@ __all__ = [
     'get_user_name',
     'html_to_markdown',
     'normalize_company_name',
+    'normalize_easy_apply',
+    'normalize_posted_at',
     'parse_location',
     'APIFY_AVAILABLE',
     'apify_jobs_search_is_cached',

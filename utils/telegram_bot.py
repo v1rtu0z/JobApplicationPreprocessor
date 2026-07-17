@@ -211,7 +211,13 @@ def _application_awaiting_user(db) -> bool:
 
 
 def _get_next_ready_application(db) -> dict | None:
-    db.sort_by([("Fit score enum", False), ("JD fit score", False), ("Location Priority", True)])
+    db.sort_by([
+        ("Fit score enum", False),
+        ("JD fit score", False),
+        ("Easy apply", False),
+        ("Date posted", False),
+        ("Location Priority", True),
+    ])
     for row in db.get_all_jobs():
         if application_is_ready(row):
             return row
@@ -928,7 +934,13 @@ def _skip_co_job_id(job_id: int) -> None:
 
 
 def _get_next_manual_co_job(db) -> dict | None:
-    db.sort_by([("JD fit score", False), ("Fit score enum", False), ("Location Priority", True)])
+    db.sort_by([
+        ("JD fit score", False),
+        ("Fit score enum", False),
+        ("Easy apply", False),
+        ("Date posted", False),
+        ("Location Priority", True),
+    ])
     skipped = _load_skipped_co_job_ids()
     for row in db.get_all_jobs():
         if row["_id"] in skipped:

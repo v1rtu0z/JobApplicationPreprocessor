@@ -86,6 +86,8 @@ def build_repost_updates(old_row: dict, new_fields: dict) -> dict[str, str]:
         "Job Title": (new_fields.get("Job Title") or old_row.get("Job Title") or "").strip(),
         "Company Name": (new_fields.get("Company Name") or old_row.get("Company Name") or "").strip(),
         "Date added": (new_fields.get("Date added") or "").strip(),
+        "Date posted": (new_fields.get("Date posted") or "").strip(),
+        "Easy apply": (new_fields.get("Easy apply") or "").strip(),
         "Bulk filtered": "FALSE",
         "JD crawl attempted": "TRUE" if (new_fields.get("Job Description") or "").strip() else "FALSE",
         "CO fetch attempted": (old_row.get("CO fetch attempted") or "FALSE"),

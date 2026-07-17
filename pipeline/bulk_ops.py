@@ -311,6 +311,17 @@ def bulk_fetch_missing_job_descriptions(db):
                         'Job Description': desc,
                         'JD crawl attempted': 'TRUE',
                     }
+                    apply_details = item.get('apply_details') or {}
+                    if isinstance(apply_details, dict) and 'is_easy_apply' in apply_details:
+                        from utils.parsing import normalize_easy_apply
+                        easy = normalize_easy_apply(apply_details.get('is_easy_apply'))
+                        if easy:
+                            updates['Easy apply'] = easy
+                    elif 'is_easy_apply' in item:
+                        from utils.parsing import normalize_easy_apply
+                        easy = normalize_easy_apply(item.get('is_easy_apply'))
+                        if easy:
+                            updates['Easy apply'] = easy
                     comp_info = item.get('company_info', {})
                     co_desc = comp_info.get('description', '')
                     if co_desc:

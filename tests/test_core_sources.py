@@ -15,6 +15,8 @@ class TestApifyNormalization:
             "job_url": "https://linkedin.com/jobs/123",
             "location": "Remote",
             "description": "Build things.",
+            "posted_at": "2026-05-12",
+            "is_easy_apply": True,
         }
         out = _normalize_apify_item(item)
         assert out["job_title"] == "Software Engineer"
@@ -22,6 +24,8 @@ class TestApifyNormalization:
         assert out["job_url"] == "https://linkedin.com/jobs/123"
         assert out["location"] == "Remote"
         assert out["job_description"] == "Build things."
+        assert out["date_posted"] == "2026-05-12"
+        assert out["easy_apply"] == "TRUE"
 
     def test_normalize_apify_alternate_keys(self):
         item = {
@@ -29,12 +33,14 @@ class TestApifyNormalization:
             "company_name": "Corp",
             "url": "https://u",
             "jobDescriptionText": "JD here",
+            "postedDate": "3 days ago",
         }
         out = _normalize_apify_item(item)
         assert out["job_title"] == "Dev"
         assert out["company_name"] == "Corp"
         assert out["job_url"] == "https://u"
         assert out["job_description"] == "JD here"
+        assert out["date_posted"]  # relative → YYYY-MM-DD
 
 
 class TestFactory:

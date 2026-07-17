@@ -371,26 +371,27 @@ def render_jobs_view(sidebar_slot=None) -> None:
     with col_sort1:
         sort_by_1 = st.selectbox(
             "Primary Sort",
-            ["JD Fit Score", "Location Priority", "Fit Score", "Company", "Location"],
+            ["Fit Score", "JD Fit Score", "Easy apply", "Date posted", "Location Priority", "Company", "Location"],
             key="sort_by_1",
             # Default: surface best-fitting jobs first.
-            index=2,
+            index=0,
         )
         sort_order_1 = st.selectbox("Order", ["Descending", "Ascending"], key="sort_order_1", index=0)
     with col_sort2:
         sort_by_2 = st.selectbox(
             "Secondary Sort",
-            ["JD Fit Score", "Fit Score", "Location Priority", "Company", "Location"],
+            ["Easy apply", "Date posted", "JD Fit Score", "Fit Score", "Location Priority", "Company", "Location"],
             key="sort_by_2",
+            # Within the same fit category, prefer Easy Apply listings.
             index=0,
         )
         sort_order_2 = st.selectbox("Order", ["Descending", "Ascending"], key="sort_order_2", index=0)
     with col_sort3:
         sort_by_3 = st.selectbox(
             "Tertiary Sort",
-            ["None", "Company", "Location", "JD Fit Score", "Fit Score", "Location Priority"],
+            ["None", "Date posted", "Location Priority", "Company", "Location", "JD Fit Score", "Fit Score", "Easy apply"],
             key="sort_by_3",
-            index=0,
+            index=1,
         )
         sort_order_3 = st.selectbox("Order", ["Descending", "Ascending"], key="sort_order_3", index=0)
 
@@ -405,6 +406,15 @@ def render_jobs_view(sidebar_slot=None) -> None:
             sort_ascending.append(ascending)
         elif ui_label == "Location Priority" and "Location Priority" in filtered_df.columns:
             sort_columns.append("Location Priority")
+            sort_ascending.append(ascending)
+        elif ui_label == "Date posted" and "Date posted" in filtered_df.columns:
+            sort_columns.append("Date posted")
+            sort_ascending.append(ascending)
+        elif ui_label == "Easy apply" and "Easy apply" in filtered_df.columns:
+            # TRUE before FALSE/empty when descending.
+            sort_col = "_sort_easy_apply"
+            filtered_df[sort_col] = filtered_df["Easy apply"].fillna("").astype(str).str.upper().eq("TRUE").astype(int)
+            sort_columns.append(sort_col)
             sort_ascending.append(ascending)
         elif ui_label == "Fit Score":
             if "Fit score enum" in filtered_df.columns:
@@ -530,6 +540,8 @@ def render_jobs_view(sidebar_slot=None) -> None:
             title_parts.append(f"📊 JD fit {jd_fit_score}/10")
         if fit_score and fit_score != "Unknown":
             title_parts.append(f"⭐ {fit_score}")
+        if _get(row, "Easy apply", "") == "TRUE":
+            title_parts.append("⚡ Easy Apply")
         # FALSE due only to missing CO is shown as Missing CO, not "Not Sustainable"
         unsustainable_no_co = (
             sustainable == "FALSE"
@@ -553,11 +565,17 @@ def render_jobs_view(sidebar_slot=None) -> None:
             title_parts.append("⚠️ Missing CO")
 
         date_added_label = format_date_added(_get(row, "Date added", ""))
+        date_posted_label = format_date_added(_get(row, "Date posted", ""))
         expander_label = " | ".join(title_parts)
+        date_anchor_bits = []
+        if date_posted_label:
+            date_anchor_bits.append(f"Posted {html.escape(date_posted_label)}")
         if date_added_label:
+            date_anchor_bits.append(f"Added {html.escape(date_added_label)}")
+        if date_anchor_bits:
             st.markdown(
                 f'<div class="jab-job-date-anchor" aria-hidden="true">'
-                f'<span>{html.escape(date_added_label)}</span></div>',
+                f'<span>{" · ".join(date_anchor_bits)}</span></div>',
                 unsafe_allow_html=True,
             )
         # Show "Apply" at top only when fit is at least moderate; otherwise same fields live in Job details
