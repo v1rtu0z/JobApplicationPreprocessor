@@ -31,23 +31,104 @@ def _ready_job(**extra):
 
 
 class TestApplicationIsReady:
-    def test_ready_when_good_fit_with_assets(self):
-        assert tg.application_is_ready(_ready_job())
+    def test_ready_when_good_fit_with_assets(self, tmp_path):
+        resume = tmp_path / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
+        assert tg.application_is_ready(_ready_job(**{"Tailored resume url": str(resume)}))
 
-    def test_not_ready_when_already_notified(self):
-        assert not tg.application_is_ready(_ready_job(**{"Telegram notified": "TRUE"}))
+    def test_not_ready_when_resume_file_missing(self):
+        assert not tg.application_is_ready(
+            _ready_job(**{"Tailored resume url": "local_data/resumes/does_not_exist.pdf"})
+        )
 
-    def test_not_ready_for_moderate_fit(self):
-        assert not tg.application_is_ready(_ready_job(**{"Fit score": "Moderate fit"}))
+    def test_not_ready_when_already_notified(self, tmp_path):
+        resume = tmp_path / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
+        assert not tg.application_is_ready(
+            _ready_job(**{"Tailored resume url": str(resume), "Telegram notified": "TRUE"})
+        )
 
-    def test_not_ready_when_applied(self):
-        assert not tg.application_is_ready(_ready_job(**{"Applied": "TRUE"}))
+    def test_not_ready_for_moderate_fit(self, tmp_path):
+        resume = tmp_path / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
+        assert not tg.application_is_ready(
+            _ready_job(**{"Tailored resume url": str(resume), "Fit score": "Moderate fit"})
+        )
 
-    def test_not_ready_when_hidden_from_dashboard(self, monkeypatch):
+    def test_not_ready_when_applied(self, tmp_path):
+        resume = tmp_path / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
+        assert not tg.application_is_ready(
+            _ready_job(**{"Tailored resume url": str(resume), "Applied": "TRUE"})
+        )
+
+    def test_not_ready_when_hidden_from_dashboard(self, tmp_path, monkeypatch):
+        resume = tmp_path / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
         monkeypatch.setattr("pipeline.dashboard_filter.CHECK_SUSTAINABILITY", True)
         assert not tg.application_is_ready(
-            _ready_job(**{"Sustainable company": "FALSE"})
+            _ready_job(**{"Tailored resume url": str(resume), "Sustainable company": "FALSE"})
         )
+
+    def test_requeue_clears_dangling_resume_path(self, job_db, tmp_path, monkeypatch):
+        monkeypatch.setattr(tg, "PENDING_APP_FILE", tmp_path / "pending_app.json")
+        job_db.add_jobs([
+            _ready_job(**{
+                "Tailored resume url": "local_data/resumes/missing.pdf",
+                "Telegram notified": "TRUE",
+            })
+        ])
+        job = job_db.get_all_jobs()[0]
+        tg._set_pending_application_job_id(job["_id"])
+
+        assert tg._requeue_if_resume_file_missing(job_db, job) is True
+        updated = job_db.get_job_by_id(job["_id"])
+        assert updated["Tailored resume url"] == ""
+        assert updated.get("Telegram notified") != "TRUE"
+        assert tg._load_pending_application_job_id() is None
+
+    def test_requeue_leaves_remote_drive_urls(self, job_db):
+        drive = "https://drive.google.com/file/d/abc/view"
+        job_db.add_jobs([_ready_job(**{"Tailored resume url": drive, "Telegram notified": "TRUE"})])
+        job = job_db.get_all_jobs()[0]
+
+        assert tg._requeue_if_resume_file_missing(job_db, job) is False
+        updated = job_db.get_job_by_id(job["_id"])
+        assert updated["Tailored resume url"] == drive
+        assert updated["Telegram notified"] == "TRUE"
+        assert not tg.application_is_ready(updated)
+
+    def test_notify_skips_missing_resume_and_sends_next(self, job_db, tmp_path, monkeypatch):
+        resume = tmp_path / "ok.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
+        job_db.add_jobs([
+            _ready_job(**{
+                "Company Name": "Broken Co",
+                "Job URL": "https://example.com/broken",
+                "Tailored resume url": str(tmp_path / "gone.pdf"),
+                "Fit score enum": "5",
+            }),
+            _ready_job(**{
+                "Company Name": "Ok Co",
+                "Job URL": "https://example.com/ok",
+                "Tailored resume url": str(resume),
+                "Fit score enum": "4",
+            }),
+        ])
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setattr(tg, "resolve_chat_id", lambda: "42")
+        monkeypatch.setattr(tg, "PENDING_APP_FILE", tmp_path / "pending_app.json")
+        send_mock = MagicMock(return_value=1)
+        monkeypatch.setattr(tg, "send_application_package", send_mock)
+
+        assert tg.notify_ready_applications(job_db) == 1
+        broken = next(j for j in job_db.get_all_jobs() if j["Company Name"] == "Broken Co")
+        ok = next(j for j in job_db.get_all_jobs() if j["Company Name"] == "Ok Co")
+        assert broken["Tailored resume url"] == ""
+        assert broken.get("Telegram notified") != "TRUE"
+        assert ok["Telegram notified"] == "TRUE"
+        assert send_mock.call_count == 1
+        assert send_mock.call_args[0][1]["Company Name"] == "Ok Co"
 
 
 class TestCallbackHandling:
@@ -356,10 +437,12 @@ class TestVeryGoodFitTelegramDeferred:
         )
         notify_mock.assert_not_called()
 
-    def test_telegram_when_application_ready(self, job_db, monkeypatch):
+    def test_telegram_when_application_ready(self, job_db, tmp_path, monkeypatch):
         from pipeline.analysis import _apply_analysis_result
 
-        row = _ready_job()
+        resume = tmp_path / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
+        row = _ready_job(**{"Tailored resume url": str(resume)})
         job_db.add_jobs([row])
         stored = job_db.get_all_jobs()[0]
 

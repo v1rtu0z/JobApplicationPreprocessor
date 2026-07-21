@@ -178,12 +178,54 @@ def application_is_ready(row: dict) -> bool:
         return False
     if (row.get("Bad analysis") or "").strip().upper() == "TRUE":
         return False
-    if not (row.get("Tailored resume url") or "").strip():
+    resume_path = (row.get("Tailored resume url") or "").strip()
+    if not resume_path or _read_resume_bytes(resume_path) is None:
         return False
     if not (row.get("Tailored cover letter (to be humanized)") or "").strip():
         return False
     if (row.get("Telegram notified") or "").strip().upper() == "TRUE":
         return False
+    return True
+
+
+def _is_local_resume_path(resume_path: str) -> bool:
+    """True for filesystem paths we can attach; remote URLs (e.g. Drive) are left alone."""
+    p = (resume_path or "").strip()
+    if not p:
+        return False
+    return not (p.startswith("http://") or p.startswith("https://"))
+
+
+def _requeue_if_resume_file_missing(db, row: dict) -> bool:
+    """Clear a dangling local resume path so the pipeline regenerates it. Returns True if updated."""
+    resume_path = (row.get("Tailored resume url") or "").strip()
+    if not resume_path or not _is_local_resume_path(resume_path):
+        return False
+    if _read_resume_bytes(resume_path) is not None:
+        return False
+
+    job_id = row.get("_id")
+    company = row.get("Company Name", "")
+    title = row.get("Job Title", "")
+    updates = {
+        "Tailored resume url": "",
+        # Drop notified state so this job can be Telegram'd again once the PDF exists.
+        "Telegram notified": "",
+        "Telegram app completed": "",
+    }
+    if job_id is not None:
+        db.update_job(int(job_id), updates)
+        if _load_pending_application_job_id() == int(job_id):
+            _clear_pending_application_job_id()
+    else:
+        job_url = (row.get("Job URL") or "").strip()
+        if job_url and company:
+            db.update_job_by_key(job_url, company, updates)
+
+    print(
+        f"Telegram: resume file missing for {title} @ {company} "
+        f"({resume_path}) — cleared path so pipeline will regenerate."
+    )
     return True
 
 
@@ -353,6 +395,14 @@ def send_application_package(chat_id: str, row: dict) -> int | None:
     if job_id is None:
         raise RuntimeError("Job row missing _id for Telegram application package")
 
+    resume_path = (row.get("Tailored resume url") or "").strip()
+    resume_bytes = _read_resume_bytes(resume_path)
+    if not resume_bytes:
+        raise RuntimeError(
+            f"Resume file missing for job {job_id} "
+            f"({row.get('Job Title', '')} @ {row.get('Company Name', '')}): {resume_path!r}"
+        )
+
     summary = _build_summary_text(row)
     _api("sendMessage", chat_id=chat_id, text=summary, parse_mode="HTML", disable_web_page_preview=False)
 
@@ -374,8 +424,6 @@ def send_application_package(chat_id: str, row: dict) -> int | None:
 
     company = row.get("Company Name", "")
     title = row.get("Job Title", "")
-    resume_path = row.get("Tailored resume url", "")
-    resume_bytes = _read_resume_bytes(resume_path)
     link_only_caption = footer.lstrip("\n") if footer else None
 
     if resume_bytes and cl_text:
@@ -405,22 +453,20 @@ def send_application_package(chat_id: str, row: dict) -> int | None:
         )
         return result.get("result", {}).get("message_id")
 
-    if resume_bytes:
-        resume_name = Path(resume_path).name or "resume.pdf"
-        data = {
-            "chat_id": chat_id,
-            "caption": apply_caption,
-            "parse_mode": "HTML",
-            "reply_markup": json.dumps(keyboard),
-        }
-        result = _api_multipart(
-            "sendDocument",
-            data,
-            {"document": (resume_name, resume_bytes, "application/pdf")},
-        )
-        return result.get("result", {}).get("message_id")
-
-    return _send_apply_prompt(chat_id, row)
+    # Cover letter missing but resume present — still attach apply buttons to the PDF.
+    resume_name = Path(resume_path).name or "resume.pdf"
+    data = {
+        "chat_id": chat_id,
+        "caption": apply_caption,
+        "parse_mode": "HTML",
+        "reply_markup": json.dumps(keyboard),
+    }
+    result = _api_multipart(
+        "sendDocument",
+        data,
+        {"document": (resume_name, resume_bytes, "application/pdf")},
+    )
+    return result.get("result", {}).get("message_id")
 
 
 def _expired_keyboard(job_id: int, fingerprint: str, *, stage: str = "q2") -> dict:
@@ -779,6 +825,11 @@ def notify_ready_applications(db) -> int:
         print("Telegram: no chat ID yet — send /start to your bot from Telegram.")
         return 0
 
+    # Dangling resume paths (URL set, file gone) must not be treated as ready — clear them
+    # so process_resume regenerates and this job re-enters the notify queue later.
+    for row in db.get_all_jobs():
+        _requeue_if_resume_file_missing(db, row)
+
     if _application_awaiting_user(db):
         return 0
 
@@ -795,6 +846,10 @@ def notify_ready_applications(db) -> int:
         print(f"Telegram: sent application package for {title} @ {company}")
         return 1
     except Exception as e:
+        # If the PDF vanished between readiness check and send, requeue instead of stalling.
+        if _requeue_if_resume_file_missing(db, row):
+            print(f"Telegram: skipped {title} @ {company} (missing resume); will regenerate.")
+            return 0
         print(f"Telegram: failed to notify {title} @ {company}: {e}")
         return 0
 
