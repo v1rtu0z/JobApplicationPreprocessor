@@ -169,7 +169,9 @@ def _apply_keyword_filters(job_title, company_name, raw_location, filters, job_d
     if geo_skip:
         return True, geo_reason
     location_norm = (raw_location or "").lower()
-    should_skip_location = any(keyword in location_norm for keyword in filters['location_skip_keywords'])
+    should_skip_location = any(
+        keyword.lower() in location_norm for keyword in filters['location_skip_keywords']
+    )
     should_skip_title = any(
         _title_skip_keyword_applies(keyword, title_norm, job_title)
         for keyword in filters['job_title_skip_keywords']
@@ -179,7 +181,8 @@ def _apply_keyword_filters(job_title, company_name, raw_location, filters, job_d
         keyword.lower() in title_words for keyword in filters['job_title_skip_keywords_2']
     )
     should_skip_company = any(
-        keyword in normalize_company_name(company_name) for keyword in filters['company_skip_keywords']
+        keyword.lower() in normalize_company_name(company_name)
+        for keyword in filters['company_skip_keywords']
     )
 
     if should_skip_title or should_skip_title_2:
