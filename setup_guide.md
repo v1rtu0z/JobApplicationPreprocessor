@@ -30,6 +30,8 @@ Create a `.env` file in the project root with the following keys:
 
 **Gemini API and rate limiting:** Job analysis is done locally in batches (one API call per several jobs) to reduce usage. Cover letter and resume tailoring still use the server (`SERVER_URL`). All Gemini-backed work (local batch analysis, sustainability checks, search-parameter generation, bulk filtering, and server requests for CL/resume) goes through a single rate limiter. Set `GEMINI_RPM` and `GEMINI_RPD` to match your quota (e.g. 4 and 20 for free tier) so the app stays under limits.
 
+**Multiple API keys / failover:** For resilience against quota exhaustion you can configure several keys and the app will fail over automatically when one hits a rate limit, quota, or transient error. Set `GEMINI_API_KEYS` (comma-separated) for Gemini and/or `APIFY_API_TOKENS` (comma-separated) for Apify. These are tried in order before the single-key variables (`GEMINI_API_KEY` / `BACKUP_GEMINI_API_KEY`, `APIFY_API_TOKEN`), which remain fully supported. When every configured key is exhausted the app logs a clear "All N keys exhausted" message and skips that step.
+
 #### 3. Local Storage
 The project uses local SQLite storage for job data. All job information is stored in `local_data/jobs.db`. The directory structure is created automatically on first run:
 - `local_data/jobs.db` - SQLite database with all job data

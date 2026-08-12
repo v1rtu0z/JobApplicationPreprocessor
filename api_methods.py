@@ -23,6 +23,7 @@ except ImportError:
     TKINTER_AVAILABLE = False
 
 from utils import get_user_name
+from utils.api_keys import get_gemini_labeled_keys as _gemini_labeled_keys
 from utils.gemini_throttle import acquire_gemini_slot
 from utils.prompts import render_prompt
 from config import _get_job_filters
@@ -128,10 +129,7 @@ def _make_api_request_with_fallback(url: str, payload: dict) -> dict | None:
         Exception: For non-429 errors
     """
     acquire_gemini_slot()
-    keys_to_try = [
-        ("primary", GEMINI_API_KEY),
-        ("backup", BACKUP_GEMINI_API_KEY)
-    ]
+    keys_to_try = _gemini_labeled_keys()
 
     for key_name, current_key in keys_to_try:
         if not current_key:
@@ -590,21 +588,14 @@ def get_search_parameters(resume_json: dict) -> list[dict]:
             location_line=location_line,
         )
 
-        # Try with primary key, then backup key
-        api_keys = [
-            ('primary', GEMINI_API_KEY),
-            ('backup', BACKUP_GEMINI_API_KEY)
-        ]
+        # Try each configured key in order, failing over on errors.
+        api_keys = _gemini_labeled_keys()
+        if not api_keys:
+            print("Warning: No Gemini API key found. Cannot generate search parameters.")
+            return []
 
-        for key_name, api_key in api_keys:
-            if not api_key:
-                if key_name == 'primary':
-                    print("Warning: GEMINI_API_KEY not found, trying backup...")
-                    continue
-                else:
-                    print("Warning: Both Gemini API keys not found. Cannot generate search parameters.")
-                    return []
-            
+        for key_index, (key_name, api_key) in enumerate(api_keys):
+            is_last_key = key_index == len(api_keys) - 1
             try:
                 client = genai.Client(api_key=api_key)
 
@@ -666,25 +657,21 @@ def get_search_parameters(resume_json: dict) -> list[dict]:
                             print(f"Warning: Failed to parse extracted JSON: {parse_error}")
                             pass
                     
-                    if key_name == 'primary':
-                        print(f"Error parsing JSON response from {key_name} key: {e}")
-                        print("Trying backup key...")
+                    print(f"Error parsing JSON response from {key_name}: {e}")
+                    if not is_last_key:
+                        print("Trying next key...")
                         continue
-                    else:
-                        print(f"Error parsing JSON response from {key_name} key: {e}")
-                        return []
-                
-            except Exception as e:
-                if key_name == 'primary':
-                    print(f"Error with {key_name} Gemini key: {e}")
-                    print("Trying backup key...")
-                    continue
-                else:
-                    print(f"Error with {key_name} Gemini key: {e}")
                     return []
-        
-        # Both keys failed
-        print("Warning: Failed to generate search parameters with both Gemini keys.")
+
+            except Exception as e:
+                print(f"Error with {key_name} Gemini key: {e}")
+                if not is_last_key:
+                    print("Trying next key...")
+                    continue
+                return []
+
+        # All keys failed
+        print("Warning: Failed to generate search parameters with all Gemini keys.")
         return []
 
     except Exception as e:
@@ -718,19 +705,13 @@ def bulk_filter_jobs(job_titles: list[dict], resume_json: dict, max_retries: int
         job_titles_json=json.dumps(job_titles, indent=2),
     )
 
-    # Try with primary key, then backup key
-    api_keys = [
-        ('primary', GEMINI_API_KEY),
-        ('backup', BACKUP_GEMINI_API_KEY)
-    ]
+    # Try each configured key in order, failing over on errors.
+    api_keys = _gemini_labeled_keys()
+    if not api_keys:
+        raise Exception("No Gemini API key found")
 
-    for key_name, api_key in api_keys:
-        if not api_key:
-            if key_name == 'primary':
-                print(f"  Warning: Primary Gemini API key not found, trying backup...")
-                continue
-            else:
-                raise Exception("Both Gemini API keys not found")
+    for key_index, (key_name, api_key) in enumerate(api_keys):
+        is_last_key = key_index == len(api_keys) - 1
 
         # Load settings
         model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
@@ -778,12 +759,11 @@ def bulk_filter_jobs(job_titles: list[dict], resume_json: dict, max_retries: int
                     time.sleep(wait_time)
                 else:
                     # Last attempt with this key failed
-                    print(f"  All attempts failed with {key_name} key: {e}")
-                    if key_name == 'backup':
-                        # This was the last key, raise error
-                        raise Exception(f"Bulk filtering failed after {max_retries} retries with both keys: {e}")
-                    # Otherwise, break to try backup key
+                    print(f"  All attempts failed with {key_name}: {e}")
+                    if is_last_key:
+                        raise Exception(f"Bulk filtering failed after {max_retries} retries with all keys: {e}")
+                    # Otherwise, break to try the next key
                     break
 
-    # If we get here, both keys failed
-    raise Exception("Bulk filtering failed with both primary and backup API keys")
+    # If we get here, every key failed
+    raise Exception("Bulk filtering failed with all configured Gemini API keys")

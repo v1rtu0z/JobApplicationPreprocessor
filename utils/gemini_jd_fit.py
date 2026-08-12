@@ -7,6 +7,7 @@ import time
 
 import google.genai as genai
 
+from .api_keys import get_gemini_labeled_keys
 from .gemini_rate_limit import mark_gemini_rate_limit_hit
 from .prompts import render_prompt
 
@@ -117,21 +118,16 @@ def score_jobs_by_jd_batch(
     if not job_details_list:
         return []
 
-    api_keys = [
-        ('primary', os.getenv('GEMINI_API_KEY')),
-        ('backup', os.getenv('BACKUP_GEMINI_API_KEY')),
-    ]
+    api_keys = get_gemini_labeled_keys()
+    if not api_keys:
+        print('Warning: No Gemini API key found.')
+        return []
     model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
     prompt = _build_jd_fit_prompt(resume_json, job_details_list)
     last_error = None
 
-    for key_name, api_key in api_keys:
-        if not api_key:
-            if key_name == 'primary':
-                print('Warning: GEMINI_API_KEY not found, trying backup...')
-                continue
-            print('Warning: Both Gemini API keys not found.')
-            return []
+    for key_index, (key_name, api_key) in enumerate(api_keys):
+        is_last_key = key_index == len(api_keys) - 1
 
         for attempt in range(3):
             try:
@@ -164,11 +160,10 @@ def score_jobs_by_jd_batch(
                     print(f'  → Retrying in {wait}s...')
                     time.sleep(wait)
                     continue
-                if key_name == 'primary':
-                    print(f'JD fit scoring error ({key_name}): {e}')
-                    print('  → Trying backup key...')
-                    break
                 print(f'JD fit scoring error ({key_name}): {e}')
+                if not is_last_key:
+                    print('  → Trying next key...')
+                    break
                 return []
 
     if last_error:

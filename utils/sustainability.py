@@ -7,6 +7,7 @@ import google.genai as genai
 
 from config import _get_job_filters
 
+from .api_keys import get_gemini_labeled_keys
 from .apify_client import rate_limit
 from .gemini_rate_limit import mark_gemini_rate_limit_hit
 from .gemini_throttle import acquire_gemini_slot
@@ -17,19 +18,13 @@ from .prompts import render_prompt
 def _call_gemini_for_sustainability(prompt: str, key_name_context: str = "") -> dict | None:
     """Common logic for calling Gemini API with fallback for sustainability checks."""
     acquire_gemini_slot()
-    api_keys = [
-        ('primary', os.getenv("GEMINI_API_KEY")),
-        ('backup', os.getenv("BACKUP_GEMINI_API_KEY"))
-    ]
+    api_keys = get_gemini_labeled_keys()
+    if not api_keys:
+        print("Warning: No Gemini API key found")
+        return None
 
-    for key_name, api_key in api_keys:
-        if not api_key:
-            if key_name == 'primary':
-                print("Warning: GEMINI_API_KEY not found, trying backup...")
-                continue
-            else:
-                print("Warning: Both API keys not found")
-                return None
+    for key_index, (key_name, api_key) in enumerate(api_keys):
+        is_last_key = key_index == len(api_keys) - 1
 
         try:
             client = genai.Client(api_key=api_key)
@@ -52,13 +47,11 @@ def _call_gemini_for_sustainability(prompt: str, key_name_context: str = "") -> 
             if is_rate_limit:
                 mark_gemini_rate_limit_hit()
 
-            if key_name == 'primary':
-                print(f"Error with {key_name} key{' for ' + key_name_context if key_name_context else ''}: {e}")
-                print("  → Trying backup key...")
+            print(f"Error with {key_name}{' for ' + key_name_context if key_name_context else ''}: {e}")
+            if not is_last_key:
+                print("  → Trying next key...")
                 continue
-            else:
-                print(f"Error with {key_name} key{' for ' + key_name_context if key_name_context else ''}: {e}")
-                return None
+            return None
 
     mark_gemini_rate_limit_hit()
     return None

@@ -7,6 +7,12 @@ from urllib.parse import urlparse, parse_qs
 
 from apify_client import ApifyClient
 
+from .api_keys import (
+    AllKeysExhaustedError,
+    get_apify_api_tokens,
+    is_quota_or_rate_limit_error,
+    run_with_key_failover,
+)
 from .apify_search_cache import (
     APIFY_SEARCH_CACHE_TTL_DAYS,
     days_since_fetch,
@@ -20,6 +26,15 @@ from .parsing import normalize_company_name
 
 # Global variable to track last request time (used by rate_limit)
 last_request_time = 0
+
+
+def _apify_error_is_retryable(exc: BaseException) -> bool:
+    """Fail over to the next token on quota/rate-limit/5xx or a monthly hard limit.
+
+    A monthly hard limit is per-account, so another account's token may still
+    have quota — worth trying the next one before giving up.
+    """
+    return is_quota_or_rate_limit_error(exc) or ApifyStateManager.is_monthly_limit_error(str(exc))
 
 
 class _ApifyAvailableProxy:
@@ -85,30 +100,39 @@ def fetch_job_details_bulk_via_apify(job_ids: list[str]) -> list[dict]:
 
     print(f"Fetching {len(job_ids)} job details via Apify in bulk...")
 
-    token = os.getenv("APIFY_API_TOKEN")
-    if not token:
+    tokens = get_apify_api_tokens()
+    if not tokens:
         return []
 
-    client = ApifyClient(token)
-
-    try:
+    def _fetch(token: str) -> list[dict]:
+        client = ApifyClient(token)
         run_input = {"job_id": job_ids}
         run = client.actor("apimaestro/linkedin-job-detail").call(run_input=run_input)
-        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        return list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
-        if not items:
-            print(f"  No job details found on Apify")
-            return []
-
-        print(f"Successfully fetched {len(items)}/{len(job_ids)} job details")
-        return items
-
+    try:
+        items = run_with_key_failover(
+            tokens, _fetch, label="Apify token", is_retryable=_apify_error_is_retryable
+        )
+    except AllKeysExhaustedError as exc:
+        error_msg = str(exc.__cause__ or exc)
+        print(f"Error in bulk Apify job detail fetch: {error_msg}")
+        if ApifyStateManager.is_monthly_limit_error(error_msg):
+            apify_state.handle_error(error_msg)
+        return []
     except Exception as e:
         error_msg = str(e)
         print(f"Error in bulk Apify job detail fetch: {error_msg}")
         if ApifyStateManager.is_monthly_limit_error(error_msg):
             apify_state.handle_error(error_msg)
         return []
+
+    if not items:
+        print(f"  No job details found on Apify")
+        return []
+
+    print(f"Successfully fetched {len(items)}/{len(job_ids)} job details")
+    return items
 
 
 def _build_apify_jobs_run_input(search_url: str = None, params: dict = None) -> dict | None:
@@ -209,16 +233,16 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
         print("Apify is currently unavailable (usage limit reached). Skipping job fetch.")
         return []
 
-    token = os.getenv("APIFY_API_TOKEN")
-    if not token:
+    tokens = get_apify_api_tokens()
+    if not tokens:
         return []
 
     print(f"Running Apify Actor for keywords: '{run_input.get('keywords')}' in location: '{run_input.get('location')}'")
 
-    client = ApifyClient(token)
     actor_input = {key: value for key, value in run_input.items() if key != "page"}
 
-    try:
+    def _search(token: str) -> list[dict]:
+        client = ApifyClient(token)
         run = client.actor("apimaestro/linkedin-jobs-scraper-api").call(run_input=actor_input)
         items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
@@ -231,12 +255,18 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
                         items = val['results']
             except Exception:
                 pass
-
-        if items:
-            mark_apify_search_fetched(run_input)
-        print(f"Fetched {len(items)} jobs from Apify.")
         return items
 
+    try:
+        items = run_with_key_failover(
+            tokens, _search, label="Apify token", is_retryable=_apify_error_is_retryable
+        )
+    except AllKeysExhaustedError as exc:
+        error_msg = str(exc.__cause__ or exc)
+        print(f"Error running Apify Actor: {error_msg}")
+        if ApifyStateManager.is_monthly_limit_error(error_msg):
+            apify_state.handle_error(error_msg)
+        return []
     except Exception as e:
         error_msg = str(e)
         print(f"Error running Apify Actor: {error_msg}")
@@ -244,12 +274,18 @@ def fetch_jobs_via_apify(search_url: str = None, params: dict = None) -> list[di
             apify_state.handle_error(error_msg)
         return []
 
+    if items:
+        mark_apify_search_fetched(run_input)
+    print(f"Fetched {len(items)} jobs from Apify.")
+    return items
+
 
 def get_apify_usage_summary() -> dict:
-    """Return current billing-cycle usage from the Apify account API."""
-    token = os.getenv("APIFY_API_TOKEN")
-    if not token:
+    """Return current billing-cycle usage from the Apify account API (first token)."""
+    tokens = get_apify_api_tokens()
+    if not tokens:
         return {}
+    token = tokens[0]
     try:
         client = ApifyClient(token)
         usage = client.user().monthly_usage()

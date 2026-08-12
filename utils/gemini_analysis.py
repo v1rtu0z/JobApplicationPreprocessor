@@ -6,6 +6,7 @@ import re
 
 import google.genai as genai
 
+from .api_keys import get_gemini_labeled_keys
 from .gemini_rate_limit import mark_gemini_rate_limit_hit
 from .prompts import render_prompt
 
@@ -61,21 +62,15 @@ def analyze_jobs_batch(
     if not job_details_list:
         return []
 
-    api_keys = [
-        ('primary', os.getenv('GEMINI_API_KEY')),
-        ('backup', os.getenv('BACKUP_GEMINI_API_KEY')),
-    ]
+    api_keys = get_gemini_labeled_keys()
+    if not api_keys:
+        print('Warning: No Gemini API key found.')
+        return []
     model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
     prompt = _build_batch_analysis_prompt(resume_json, job_details_list)
 
-    for key_name, api_key in api_keys:
-        if not api_key:
-            if key_name == 'primary':
-                print('Warning: GEMINI_API_KEY not found, trying backup...')
-                continue
-            print('Warning: Both Gemini API keys not found.')
-            return []
-
+    for key_index, (key_name, api_key) in enumerate(api_keys):
+        is_last_key = key_index == len(api_keys) - 1
         try:
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
@@ -112,11 +107,10 @@ def analyze_jobs_batch(
             err = str(e)
             if '429' in err or 'Rate limit' in err or 'ResourceExhausted' in err or 'quota' in err.lower():
                 mark_gemini_rate_limit_hit()
-            if key_name == 'primary':
-                print(f'Batch analysis error ({key_name}): {e}')
-                print('  → Trying backup key...')
-                continue
             print(f'Batch analysis error ({key_name}): {e}')
+            if not is_last_key:
+                print('  → Trying next key...')
+                continue
             return []
 
     mark_gemini_rate_limit_hit()
