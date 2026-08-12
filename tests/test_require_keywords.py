@@ -110,6 +110,38 @@ class TestSkipWinsOverRequire:
         assert reason == "Job title contains unwanted technology"
 
 
+class TestConfigPersistence:
+    def test_require_keywords_round_trip(self, tmp_path, monkeypatch):
+        # Mirrors what the dashboard "Save keyword settings" button does: write the
+        # lists via _save_job_filters, then read them back via _get_job_filters.
+        yaml_path = tmp_path / "job_preferences.yaml"
+        yaml_path.write_text("job_title_skip_keywords: []\n", encoding="utf-8")
+        monkeypatch.setattr("config.CONFIG_FILE", str(yaml_path))
+
+        from config import _get_job_filters, _save_job_filters
+
+        filters = _get_job_filters()
+        filters["job_title_require_keywords"] = ["Python", "Backend"]
+        filters["job_require_keywords"] = ["Kubernetes"]
+        _save_job_filters(filters)
+
+        reloaded = _get_job_filters()
+        assert reloaded["job_title_require_keywords"] == ["Python", "Backend"]
+        assert reloaded["job_require_keywords"] == ["Kubernetes"]
+
+    def test_require_keywords_default_empty(self, tmp_path, monkeypatch):
+        yaml_path = tmp_path / "job_preferences.yaml"
+        yaml_path.write_text("job_title_skip_keywords: []\n", encoding="utf-8")
+        monkeypatch.setattr("config.CONFIG_FILE", str(yaml_path))
+
+        from config import _get_job_filters
+
+        filters = _get_job_filters()
+        # Keys always exist (from defaults) and default to empty -> feature disabled.
+        assert filters["job_title_require_keywords"] == []
+        assert filters["job_require_keywords"] == []
+
+
 class TestHelperDirectly:
     def test_no_lists_returns_matched(self):
         matched, reason = _require_keywords_matched("Anything", "", _filters())
