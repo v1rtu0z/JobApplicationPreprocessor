@@ -12,7 +12,7 @@ from utils.api_keys import (
 )
 
 GEMINI_ENV = ("GEMINI_API_KEYS", "GEMINI_API_KEY", "BACKUP_GEMINI_API_KEY")
-APIFY_ENV = ("APIFY_API_TOKENS", "APIFY_API_TOKEN")
+APIFY_ENV = ("APIFY_API_TOKENS", "APIFY_API_TOKEN", "APIFY_API_TOKEN_2", "APIFY_API_TOKEN_3")
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +61,18 @@ class TestApifyTokenResolution:
         monkeypatch.setenv("APIFY_API_TOKENS", "t1,t2")
         monkeypatch.setenv("APIFY_API_TOKEN", "t1")
         assert get_apify_api_tokens() == ["t1", "t2"]
+
+    def test_numbered_suffix_tokens_after_primary(self, monkeypatch):
+        monkeypatch.setenv("APIFY_API_TOKEN", "primary")
+        monkeypatch.setenv("APIFY_API_TOKEN_2", "secondary")
+        monkeypatch.setenv("APIFY_API_TOKEN_3", "tertiary")
+        assert get_apify_api_tokens() == ["primary", "secondary", "tertiary"]
+
+    def test_numbered_tokens_merge_with_csv_list(self, monkeypatch):
+        monkeypatch.setenv("APIFY_API_TOKENS", "csv-one")
+        monkeypatch.setenv("APIFY_API_TOKEN", "primary")
+        monkeypatch.setenv("APIFY_API_TOKEN_2", "secondary")
+        assert get_apify_api_tokens() == ["csv-one", "primary", "secondary"]
 
 
 class TestRetryableClassification:

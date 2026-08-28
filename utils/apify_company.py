@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import re
 import unicodedata
 from urllib.parse import urlparse
 
 from apify_client import ApifyClient
 
+from .api_keys import AllKeysExhaustedError, get_apify_api_tokens, run_with_key_failover
+from .apify_client import _apify_error_is_retryable
 from .apify_state import ApifyStateManager, apify_state
 
 _LEGAL_SUFFIXES = re.compile(
@@ -95,15 +96,27 @@ def extract_company_overview_from_apify_item(item: dict) -> str:
 
 
 def _fetch_company_item(identifier: str) -> dict | None:
-    token = os.getenv("APIFY_API_TOKEN")
-    if not token:
+    tokens = get_apify_api_tokens()
+    if not tokens:
         return None
-    client = ApifyClient(token)
-    run = client.actor("apimaestro/linkedin-company-detail").call(
-        run_input={"identifier": [identifier], "maxResults": 1},
-    )
-    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
-    return items[0] if items else None
+
+    def _fetch(token: str) -> dict | None:
+        client = ApifyClient(token)
+        run = client.actor("apimaestro/linkedin-company-detail").call(
+            run_input={"identifier": [identifier], "maxResults": 1},
+        )
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        return items[0] if items else None
+
+    try:
+        return run_with_key_failover(
+            tokens, _fetch, label="Apify token", is_retryable=_apify_error_is_retryable
+        )
+    except AllKeysExhaustedError as exc:
+        error_msg = str(exc.__cause__ or exc)
+        if ApifyStateManager.is_monthly_limit_error(error_msg):
+            apify_state.handle_error(error_msg)
+        return None
 
 
 def fetch_company_overview_via_apify(company_name: str, company_url: str = "") -> str | None:

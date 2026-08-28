@@ -89,14 +89,28 @@ def get_gemini_labeled_keys() -> list[tuple[str, str]]:
     return [(f"key {i + 1}", key) for i, key in enumerate(get_gemini_api_keys())]
 
 
+def _numbered_apify_tokens() -> list[str]:
+    """Collect APIFY_API_TOKEN_2, APIFY_API_TOKEN_3, … in numeric order."""
+    out: list[str] = []
+    index = 2
+    while True:
+        value = (os.getenv(f"APIFY_API_TOKEN_{index}") or "").strip()
+        if not value:
+            break
+        out.append(value)
+        index += 1
+    return out
+
+
 def get_apify_api_tokens() -> list[str]:
     """Ordered, de-duplicated Apify API tokens.
 
-    Reads ``APIFY_API_TOKENS`` (comma-separated) first, then the legacy single
-    ``APIFY_API_TOKEN`` for backward compatibility.
+    Reads ``APIFY_API_TOKENS`` (comma-separated) first, then ``APIFY_API_TOKEN``,
+    then numbered suffix vars ``APIFY_API_TOKEN_2``, ``APIFY_API_TOKEN_3``, …
     """
     tokens = _split_csv(os.getenv("APIFY_API_TOKENS"))
     tokens.append((os.getenv("APIFY_API_TOKEN") or "").strip())
+    tokens.extend(_numbered_apify_tokens())
     return _ordered_unique(tokens)
 
 
