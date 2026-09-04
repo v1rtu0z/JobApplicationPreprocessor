@@ -24,7 +24,9 @@ def _deduplicate_filters(filters):
         'job_title_skip_keywords',
         'job_title_skip_keywords_2',
         'company_skip_keywords',
-        'location_skip_keywords'
+        'location_skip_keywords',
+        'job_title_require_keywords',
+        'job_require_keywords'
     ]
     
     for field in top_level_fields:
@@ -107,6 +109,8 @@ def _get_job_filters():
         'job_title_skip_keywords_2': [],
         'company_skip_keywords': [],
         'location_skip_keywords': [],
+        'job_title_require_keywords': [],  # Positive filter: keep only titles matching one of these
+        'job_require_keywords': [],  # Positive filter: keep only jobs whose title/description matches one of these
         'location_priorities': {},
         'sustainability_criteria': {
             'positive': [],

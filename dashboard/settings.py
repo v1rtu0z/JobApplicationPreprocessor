@@ -455,12 +455,32 @@ def render_settings_view() -> None:
                 value="\n".join(filters.get("location_skip_keywords", []) or []),
                 height=160,
             )
+            st.markdown("**Require keywords (positive filter — optional)**")
+            st.caption(
+                "Leave these empty (the default) to keep every job. When set, a job is "
+                "kept only if it matches at least one keyword. Skip keywords above still "
+                "take precedence."
+            )
+            title_require = st.text_area(
+                "Job title require keywords (substring match)",
+                value="\n".join(filters.get("job_title_require_keywords", []) or []),
+                height=120,
+                help="Keep a job only if its title contains at least one of these (case-insensitive). Empty = disabled.",
+            )
+            desc_require = st.text_area(
+                "Job title/description require keywords",
+                value="\n".join(filters.get("job_require_keywords", []) or []),
+                height=120,
+                help="Keep a job only if its title or description contains at least one of these (case-insensitive). Empty = disabled.",
+            )
             submitted = st.form_submit_button("Save keyword settings")
             if submitted:
                 filters["job_title_skip_keywords"] = _split_lines(title_1)
                 filters["job_title_skip_keywords_2"] = _split_lines(title_2)
                 filters["company_skip_keywords"] = _split_lines(company)
                 filters["location_skip_keywords"] = _split_lines(location)
+                filters["job_title_require_keywords"] = _split_lines(title_require)
+                filters["job_require_keywords"] = _split_lines(desc_require)
                 _save_job_filters(filters)
                 st.success("Saved keyword settings.")
 

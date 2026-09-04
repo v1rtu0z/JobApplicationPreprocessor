@@ -30,6 +30,25 @@ location_skip_keywords:
   - example_location_2
 
 # -----------------------------------------------------------------------------
+# Keyword-based Targeting (Positive Filters)
+# -----------------------------------------------------------------------------
+# Opt-in "require" filters. Leave the lists empty (the default) to disable them
+# and keep the previous behavior. When a list is non-empty, a job is kept only if
+# it matches at least one of its keywords (case-insensitive substring match).
+# Skip keywords above always win: a job matching a skip keyword is dropped even
+# if it also matches a require keyword.
+
+# Keep a job only if its TITLE contains one of these (case-insensitive substring)
+job_title_require_keywords: []
+#   - python
+#   - backend
+
+# Keep a job only if its TITLE or DESCRIPTION contains one of these
+job_require_keywords: []
+#   - kubernetes
+#   - postgres
+
+# -----------------------------------------------------------------------------
 # Location Priorities (Positive Filters)
 # -----------------------------------------------------------------------------
 # Lower numbers = higher priority (e.g., 1 is top priority).

@@ -158,6 +158,37 @@ def _title_skip_keyword_applies(keyword: str, title_norm: str, job_title: str) -
     return True
 
 
+def _normalize_require_keywords(raw) -> list[str]:
+    """Lowercase, strip, and drop empties from a require-keyword list."""
+    return [kw for kw in (str(k).lower().strip() for k in (raw or [])) if kw]
+
+
+def _require_keywords_matched(job_title, job_description, filters):
+    """Positive targeting: only keep jobs that match configured require-keywords.
+
+    Returns (matched, reason). A job passes (matched=True) when no require lists
+    are configured, or when it matches at least one require keyword:
+      * job_title_require_keywords -> substring match against the title
+      * job_require_keywords       -> substring match against title + description
+    Matching is case-insensitive. Empty lists disable the check (backward compatible).
+    """
+    title_require = _normalize_require_keywords(filters.get("job_title_require_keywords"))
+    desc_require = _normalize_require_keywords(filters.get("job_require_keywords"))
+    if not title_require and not desc_require:
+        return True, None
+
+    title_l = (job_title or "").lower()
+    if title_require and any(kw in title_l for kw in title_require):
+        return True, None
+
+    if desc_require:
+        haystack = f"{title_l} {(job_description or '').lower()}"
+        if any(kw in haystack for kw in desc_require):
+            return True, None
+
+    return False, "Job does not match required keywords"
+
+
 def _apply_keyword_filters(job_title, company_name, raw_location, filters, job_description=""):
     """Apply keyword-based filters to determine if a job should be skipped."""
     title_norm = _normalize_title_for_filter(job_title)
@@ -188,6 +219,14 @@ def _apply_keyword_filters(job_title, company_name, raw_location, filters, job_d
         return True, 'Location not preferred'
     elif should_skip_company:
         return True, 'Company name contains unwanted keyword'
+
+    # Positive targeting: after skip keywords (which always win), drop jobs that
+    # don't match any configured require-keyword. No-op when require lists are empty.
+    require_matched, require_reason = _require_keywords_matched(
+        job_title, job_description, filters
+    )
+    if not require_matched:
+        return True, require_reason
 
     return False, None
 
